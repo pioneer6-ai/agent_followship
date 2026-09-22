@@ -1,0 +1,20 @@
+{
+  "id": "ESC-003",
+  "patient_id": "PAT-10203",
+  "patient_name": "Siti binte Ahmad",
+  "treatment_type": "orthodontic_checkup",
+  "days_overdue": 21,
+  "urgency": "medium",
+  "reason": "Patient expressed frustration and confusion during SMS conversation. Multiple unclear responses detected. Patient appears to need clarification about treatment plan in a language-sensitive manner. Agent recommended human staff for personalized communication.",
+  "priority": "normal",
+  "escalated_at": "2026-09-19T11:45:00",
+  "conversation_log": [
+    "2026-09-01: SMS sent - \"Hi Siti, your orthodontic check-up is due.\"",
+    "2026-09-02: Patient replied: \"I dont understand. When is it? I have meeting.\"",
+    "2026-09-03: SMS sent - \"Please let us know your available dates for your check-up.\"",
+    "2026-09-04: Patient replied: \"Ah? What meeting? I dont have meeting.\"",
+    "2026-09-05: SMS sent - \"We would like to schedule your orthodontic check-up appointment.\"",
+    "2026-09-05: Patient replied: \"Okay fine but I am busy. Call me later.\"",
+    "2026-09-19: CASE ESCALATED - Multiple unclear responses, patient appears frustrated"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "id": "ESC-002",
+  "patient_id": "PAT-10158",
+  "patient_name": "James Wong",
+  "treatment_type": "root_canal",
+  "days_overdue": 30,
+  "urgency": "high",
+  "reason": "Patient sent a complex clinical question via WhatsApp about persistent pain after root canal treatment. Question requires clinical expertise to answer. Agent determined this is beyond autonomous scope.",
+  "priority": "high",
+  "escalated_at": "2026-09-18T09:15:00",
+  "conversation_log": [
+    "2026-08-20: WhatsApp message sent - \"Hi James, your root canal follow-up is due.\"",
+    "2026-08-22: Patient replied: \"I still have pain on the left side. Is this normal 3 weeks after? The pain comes in waves and sometimes radiates to my ear. Should I stop taking the antibiotics?\"",
+    "2026-08-22: Agent detected clinical question requiring expertise - escalated"
+  ]
+}

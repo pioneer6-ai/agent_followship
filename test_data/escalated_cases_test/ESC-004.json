@@ -1,0 +1,20 @@
+{
+  "id": "ESC-004",
+  "patient_id": "PAT-10087",
+  "patient_name": "Rajesh Kumar",
+  "treatment_type": "implant",
+  "days_overdue": 60,
+  "urgency": "critical",
+  "reason": "Implant follow-up severely overdue at 60 days. Patient has a history of 3 no-shows. High risk of implant complications. Requires urgent in-person assessment by specialist.",
+  "priority": "critical",
+  "escalated_at": "2026-09-10T16:20:00",
+  "conversation_log": [
+    "2026-07-15: SMS reminder sent - \"Hi Rajesh, your implant follow-up is due.\"",
+    "2026-07-20: SMS reminder sent - \"Reminder: Please schedule your implant check-up appointment.\"",
+    "2026-07-25: Phone call attempted - No answer",
+    "2026-08-01: SMS reminder sent - \"Urgent: Your implant follow-up is now 17 days overdue.\"",
+    "2026-08-10: Phone call attempted - Voicemail left",
+    "2026-08-20: SMS reminder sent - \"Your implant follow-up is now 31 days overdue. Please contact us.\"",
+    "2026-09-10: CASE ESCALATED - Critical: 60 days overdue, 3 no-show history, implant complications risk"
+  ]
+}

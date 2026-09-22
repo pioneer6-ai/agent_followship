@@ -1,0 +1,4 @@
+Patient Name,ID,Phone,Email,Last Visit Date,Treatment Type,Recall Days,Missed Appointments
+"Sarah Thompson",H001,+1-555-1001,sarah.t@gmail.com,2026-06-10,Dental Cleaning,180,0
+"Robert Martinez",H002,+1-555-1002,r.martinez@yahoo.com,2026-04-15,Root Canal,14,1
+"New Patient Test",H999,+1-555-9999,newpatient@test.com,2026-08-01,Checkup,180,0

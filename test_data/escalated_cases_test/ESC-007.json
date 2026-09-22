@@ -1,0 +1,17 @@
+{
+  "id": "ESC-007",
+  "patient_id": "PAT-10567",
+  "patient_name": "Aisyah Rahman",
+  "treatment_type": "cleaning",
+  "days_overdue": 90,
+  "urgency": "medium",
+  "reason": "Routine cleaning overdue for 90 days. Patient has been unresponsive to automated reminders for 3 months. May have moved or changed contact information. Staff needs to verify patient contact details and re-engage.",
+  "priority": "normal",
+  "escalated_at": "2026-09-12T13:00:00",
+  "conversation_log": [
+    "2026-06-15: SMS reminder sent - \"Hi Aisyah, your dental cleaning is due.\"",
+    "2026-07-15: SMS reminder sent - \"Reminder: Your dental cleaning is now 30 days overdue.\"",
+    "2026-08-15: SMS reminder sent - \"Your cleaning is 60 days overdue. Please contact us.\"",
+    "2026-09-12: CASE ESCALATED - 90 days overdue, no response to 3 months of automated reminders"
+  ]
+}

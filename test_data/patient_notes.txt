@@ -1,0 +1,52 @@
+PATIENT FOLLOW-UP LIST
+Date: September 21, 2026
+Compiled by: Nurse Jenny
+
+Patient: Michelle Cooper
+ID: TXT5001
+Contact: 555-4001, michelle.cooper@email.com
+Last Visit: May 15, 2026
+Treatment: Cleaning and Fluoride
+Next Visit: 6 months from last visit
+Notes: Regular patient, no missed appointments
+
+---
+
+Patient: Andrew Harris
+ID: TXT5002
+Phone: 555-4002
+Email: aharris@gmail.com
+Last Seen: April 5, 2026
+Procedure: Wisdom tooth extraction follow-up
+Recall: 3 weeks post-op
+History: 1 no-show
+
+---
+
+Patient: Victoria Moore
+Patient Number: TXT5003
+Tel: 555-4003
+Last Visit Date: 07/18/2026
+Service Received: Periodontal maintenance
+Follow-up Required: 90 days
+Compliance: Excellent, 0 missed appts
+
+---
+
+Patient: Justin Clark
+ID#: TXT5004
+Mobile: 555-4004, Email: justin.clark@yahoo.com
+Last Treatment: 2026-06-22
+Type: Orthodontic adjustment (braces)
+Return Schedule: Every 4 weeks
+No-show count: 3
+
+---
+
+Patient: Olivia Martinez
+PatientID: TXT5005
+Phone: 555-4005
+Last Visit: 2026-08-05
+Treatment Type: Regular checkup
+Interval: 180 days
+Perfect attendance record

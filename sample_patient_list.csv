@@ -1,0 +1,6 @@
+Patient Name,Patient ID,Phone Number,Email,Last Visit,Treatment,Days Since Visit,No Shows
+"John Smith",P2001,+1-555-0201,john.smith@email.com,2026-06-15,Dental Cleaning,98,0
+"Emma Wilson",P2002,+1-555-0202,emma.w@email.com,2026-05-20,Root Canal Follow-up,124,1
+"Michael Brown",P2003,+1-555-0203,mbrown@email.com,2026-07-10,Orthodontic Adjustment,73,0
+"Sophia Davis",P2004,+1-555-0204,sophia.davis@email.com,2026-04-15,Post-Surgery,159,0
+"William Jones",P2005,+1-555-0205,w.jones@email.com,2026-08-01,Cleaning,52,2

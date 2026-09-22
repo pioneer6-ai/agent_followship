@@ -1,0 +1,68 @@
+{
+  "hospital_name": "City Dental Clinic",
+  "export_date": "2026-09-21",
+  "patients": [
+    {
+      "patient_id": "JSON001",
+      "full_name": "Rachel Adams",
+      "contact": {
+        "phone": "+1-555-3001",
+        "email": "rachel.adams@email.com",
+        "whatsapp": "+1-555-3001"
+      },
+      "last_appointment": "2026-06-05",
+      "service": "Teeth Whitening",
+      "recall_period_days": 180,
+      "appointment_history": {
+        "total_visits": 5,
+        "missed": 0
+      }
+    },
+    {
+      "patient_id": "JSON002",
+      "full_name": "Kevin Rodriguez",
+      "contact": {
+        "phone": "+1-555-3002",
+        "email": "k.rodriguez@gmail.com"
+      },
+      "last_appointment": "2026-04-20",
+      "service": "Root Canal Treatment",
+      "recall_period_days": 14,
+      "appointment_history": {
+        "total_visits": 3,
+        "missed": 1
+      }
+    },
+    {
+      "patient_id": "JSON003",
+      "full_name": "Nicole Campbell",
+      "contact": {
+        "phone": "+1-555-3003",
+        "email": "nicole.c@yahoo.com",
+        "whatsapp": "+1-555-3003"
+      },
+      "last_appointment": "2026-07-12",
+      "service": "Orthodontic Consultation",
+      "recall_period_days": 28,
+      "appointment_history": {
+        "total_visits": 8,
+        "missed": 0
+      }
+    },
+    {
+      "patient_id": "JSON004",
+      "full_name": "Brian Foster",
+      "contact": {
+        "phone": "+1-555-3004",
+        "email": "brian.foster@outlook.com"
+      },
+      "last_appointment": "2026-03-10",
+      "service": "Dental Implant",
+      "recall_period_days": 21,
+      "appointment_history": {
+        "total_visits": 4,
+        "missed": 2
+      }
+    }
+  ]
+}

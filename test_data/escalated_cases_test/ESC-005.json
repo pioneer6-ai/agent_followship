@@ -1,0 +1,22 @@
+{
+  "id": "ESC-005",
+  "patient_id": "PAT-10312",
+  "patient_name": "林秀英",
+  "treatment_type": "periodontal",
+  "days_overdue": 35,
+  "urgency": "high",
+  "reason": "Periodontal treatment follow-up overdue. Patient requested to reschedule via SMS but provided conflicting dates. Agent could not reliably book an appointment autonomously. Requires staff assistance for date coordination.",
+  "priority": "high",
+  "escalated_at": "2026-09-20T08:30:00",
+  "conversation_log": [
+    "2026-08-18: SMS sent - \"Hi 林秀英, your periodontal maintenance is due.\"",
+    "2026-08-19: Patient replied: \"Can I come next Monday?\"",
+    "2026-08-19: SMS sent - \"Checking availability for next Monday. Would morning or afternoon work?\"",
+    "2026-08-20: Patient replied: \"Not Monday. Wednesday is good.\"",
+    "2026-08-20: SMS sent - \"Checking Wednesday availability. Morning at 10am or afternoon at 2pm?\"",
+    "2026-08-21: Patient replied: \"Tomorrow is ok.\"",
+    "2026-08-22: SMS sent - \"Clarifying: which date would you prefer for your appointment?\"",
+    "2026-08-25: Patient replied: \"Ah I forgot. Maybe next week?\"",
+    "2026-09-20: CASE ESCALATED - Conflicting scheduling responses, unable to book autonomously"
+  ]
+}

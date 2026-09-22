@@ -1,0 +1,19 @@
+{
+  "id": "ESC-001",
+  "patient_id": "PAT-10042",
+  "patient_name": "陈美玲",
+  "treatment_type": "post_surgery",
+  "days_overdue": 45,
+  "urgency": "critical",
+  "reason": "Post-surgery follow-up severely overdue. Patient has not responded to 3 SMS reminders and 2 phone calls. Requires immediate clinical assessment for potential infection complications.",
+  "priority": "critical",
+  "escalated_at": "2026-09-15T14:32:00",
+  "conversation_log": [
+    "2026-08-01: SMS reminder sent - \"Hello 陈美玲, your post-surgery follow-up is due.\"",
+    "2026-08-05: SMS reminder sent - \"Follow-up reminder: Please schedule your post-surgery checkup.\"",
+    "2026-08-10: Phone call attempted - No answer",
+    "2026-08-15: SMS reminder sent - \"Urgent: Your post-surgery follow-up is now 14 days overdue.\"",
+    "2026-08-20: Phone call attempted - No answer",
+    "2026-09-15: CASE ESCALATED - Multiple failed contact attempts for critical post-surgery follow-up"
+  ]
+}

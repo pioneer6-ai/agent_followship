@@ -1,0 +1,16 @@
+{
+  "id": "ESC-008",
+  "patient_id": "PAT-10623",
+  "patient_name": "Maria Santos",
+  "treatment_type": "pediatric",
+  "days_overdue": 25,
+  "urgency": "high",
+  "reason": "Pediatric follow-up case. Parent contacted via email asking about child braces adjustment and insurance coverage. Email thread contains complex clinical and billing questions. Requires staff with pediatric and billing expertise.",
+  "priority": "high",
+  "escalated_at": "2026-09-17T15:30:00",
+  "conversation_log": [
+    "2026-09-01: Email sent - \"Hi Maria, your child Lucas has a overdue pediatric check-up.\"",
+    "2026-09-03: Parent replied: \"Hi, Lucas has been complaining about his braces being tight. Also, can you tell me if our insurance covers the braces adjustment? We need to know before we come in. What documents do we need?\"",
+    "2026-09-17: CASE ESCALATED - Complex clinical and billing inquiry for pediatric patient"
+  ]
+}

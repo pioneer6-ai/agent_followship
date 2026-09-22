@@ -1,0 +1,7 @@
+NAME,patient_number,mobile,mail_address,visit_date,procedure,follow_up_interval,no_show_count
+Emily Brown,PX3001,555-2001,emily.brown@email.com,08/15/2026,cleaning,6 months,0
+Michael Chen,PX3002,555-2002,m.chen@gmail.com,07-10-2026,orthodontic,4 weeks,1
+Amanda White,PX3003,555-2003,awhite@yahoo.com,2026/05/20,cavity restoration,1 month,0
+Thomas Green,PX3004,555-2004,thomas.g@hotmail.com,06/01/2026,gum treatment,3 months,2
+Sophie Taylor,PX3005,555-2005,sophie.t@outlook.com,2026-04-10,post surgery,3 weeks,0
+Daniel Kim,PX3006,555-2006,dkim@email.com,2026-07-28,checkup,180 days,0

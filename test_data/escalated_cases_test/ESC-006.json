@@ -1,0 +1,17 @@
+{
+  "id": "ESC-006",
+  "patient_id": "PAT-10445",
+  "patient_name": "David Tan",
+  "treatment_type": "emergency",
+  "days_overdue": 14,
+  "urgency": "critical",
+  "reason": "Emergency follow-up case. Patient reported severe toothache via WhatsApp and requested immediate appointment. Agent could not autonomously schedule emergency slot. Requires staff coordination for same-day emergency care.",
+  "priority": "critical",
+  "escalated_at": "2026-09-21T10:05:00",
+  "conversation_log": [
+    "2026-09-15: Patient sent WhatsApp: \"HELP! My tooth is killing me! I cant sleep! Is there any emergency appointment today???\"",
+    "2026-09-15: Agent detected emergency intent and severe distress",
+    "2026-09-15: Patient sent: \"Please help! The pain is getting worse!\"",
+    "2026-09-21: CASE ESCALATED - Emergency case with severe patient distress, requires immediate human intervention"
+  ]
+}

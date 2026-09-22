@@ -1,0 +1,176 @@
+{
+  "metadata": {
+    "description": "Sample escalated cases for testing the escalation system",
+    "generated_at": "2026-09-22T15:05:15.060684",
+    "total_cases": 8,
+    "priority_distribution": {
+      "critical": 3,
+      "high": 3,
+      "normal": 2
+    },
+    "urgency_distribution": {
+      "critical": 3,
+      "high": 3,
+      "medium": 2
+    },
+    "escalation_reasons": [
+      "Multiple failed contact attempts",
+      "Complex clinical questions requiring expertise",
+      "Confused or frustrated patients",
+      "Severely overdue critical follow-ups",
+      "Scheduling coordination failures",
+      "Emergency cases with patient distress",
+      "Long-term unresponsive patients",
+      "Pediatric + billing complex inquiries"
+    ]
+  },
+  "escalated_cases": [
+    {
+      "id": "ESC-001",
+      "patient_id": "PAT-10042",
+      "patient_name": "陈美玲",
+      "treatment_type": "post_surgery",
+      "days_overdue": 45,
+      "urgency": "critical",
+      "reason": "Post-surgery follow-up severely overdue. Patient has not responded to 3 SMS reminders and 2 phone calls. Requires immediate clinical assessment for potential infection complications.",
+      "priority": "critical",
+      "escalated_at": "2026-09-15T14:32:00",
+      "conversation_log": [
+        "2026-08-01: SMS reminder sent - \"Hello 陈美玲, your post-surgery follow-up is due.\"",
+        "2026-08-05: SMS reminder sent - \"Follow-up reminder: Please schedule your post-surgery checkup.\"",
+        "2026-08-10: Phone call attempted - No answer",
+        "2026-08-15: SMS reminder sent - \"Urgent: Your post-surgery follow-up is now 14 days overdue.\"",
+        "2026-08-20: Phone call attempted - No answer",
+        "2026-09-15: CASE ESCALATED - Multiple failed contact attempts for critical post-surgery follow-up"
+      ]
+    },
+    {
+      "id": "ESC-002",
+      "patient_id": "PAT-10158",
+      "patient_name": "James Wong",
+      "treatment_type": "root_canal",
+      "days_overdue": 30,
+      "urgency": "high",
+      "reason": "Patient sent a complex clinical question via WhatsApp about persistent pain after root canal treatment. Question requires clinical expertise to answer. Agent determined this is beyond autonomous scope.",
+      "priority": "high",
+      "escalated_at": "2026-09-18T09:15:00",
+      "conversation_log": [
+        "2026-08-20: WhatsApp message sent - \"Hi James, your root canal follow-up is due.\"",
+        "2026-08-22: Patient replied: \"I still have pain on the left side. Is this normal 3 weeks after? The pain comes in waves and sometimes radiates to my ear. Should I stop taking the antibiotics?\"",
+        "2026-08-22: Agent detected clinical question requiring expertise - escalated"
+      ]
+    },
+    {
+      "id": "ESC-003",
+      "patient_id": "PAT-10203",
+      "patient_name": "Siti binte Ahmad",
+      "treatment_type": "orthodontic_checkup",
+      "days_overdue": 21,
+      "urgency": "medium",
+      "reason": "Patient expressed frustration and confusion during SMS conversation. Multiple unclear responses detected. Patient appears to need clarification about treatment plan in a language-sensitive manner. Agent recommended human staff for personalized communication.",
+      "priority": "normal",
+      "escalated_at": "2026-09-19T11:45:00",
+      "conversation_log": [
+        "2026-09-01: SMS sent - \"Hi Siti, your orthodontic check-up is due.\"",
+        "2026-09-02: Patient replied: \"I dont understand. When is it? I have meeting.\"",
+        "2026-09-03: SMS sent - \"Please let us know your available dates for your check-up.\"",
+        "2026-09-04: Patient replied: \"Ah? What meeting? I dont have meeting.\"",
+        "2026-09-05: SMS sent - \"We would like to schedule your orthodontic check-up appointment.\"",
+        "2026-09-05: Patient replied: \"Okay fine but I am busy. Call me later.\"",
+        "2026-09-19: CASE ESCALATED - Multiple unclear responses, patient appears frustrated"
+      ]
+    },
+    {
+      "id": "ESC-004",
+      "patient_id": "PAT-10087",
+      "patient_name": "Rajesh Kumar",
+      "treatment_type": "implant",
+      "days_overdue": 60,
+      "urgency": "critical",
+      "reason": "Implant follow-up severely overdue at 60 days. Patient has a history of 3 no-shows. High risk of implant complications. Requires urgent in-person assessment by specialist.",
+      "priority": "critical",
+      "escalated_at": "2026-09-10T16:20:00",
+      "conversation_log": [
+        "2026-07-15: SMS reminder sent - \"Hi Rajesh, your implant follow-up is due.\"",
+        "2026-07-20: SMS reminder sent - \"Reminder: Please schedule your implant check-up appointment.\"",
+        "2026-07-25: Phone call attempted - No answer",
+        "2026-08-01: SMS reminder sent - \"Urgent: Your implant follow-up is now 17 days overdue.\"",
+        "2026-08-10: Phone call attempted - Voicemail left",
+        "2026-08-20: SMS reminder sent - \"Your implant follow-up is now 31 days overdue. Please contact us.\"",
+        "2026-09-10: CASE ESCALATED - Critical: 60 days overdue, 3 no-show history, implant complications risk"
+      ]
+    },
+    {
+      "id": "ESC-005",
+      "patient_id": "PAT-10312",
+      "patient_name": "林秀英",
+      "treatment_type": "periodontal",
+      "days_overdue": 35,
+      "urgency": "high",
+      "reason": "Periodontal treatment follow-up overdue. Patient requested to reschedule via SMS but provided conflicting dates. Agent could not reliably book an appointment autonomously. Requires staff assistance for date coordination.",
+      "priority": "high",
+      "escalated_at": "2026-09-20T08:30:00",
+      "conversation_log": [
+        "2026-08-18: SMS sent - \"Hi 林秀英, your periodontal maintenance is due.\"",
+        "2026-08-19: Patient replied: \"Can I come next Monday?\"",
+        "2026-08-19: SMS sent - \"Checking availability for next Monday. Would morning or afternoon work?\"",
+        "2026-08-20: Patient replied: \"Not Monday. Wednesday is good.\"",
+        "2026-08-20: SMS sent - \"Checking Wednesday availability. Morning at 10am or afternoon at 2pm?\"",
+        "2026-08-21: Patient replied: \"Tomorrow is ok.\"",
+        "2026-08-22: SMS sent - \"Clarifying: which date would you prefer for your appointment?\"",
+        "2026-08-25: Patient replied: \"Ah I forgot. Maybe next week?\"",
+        "2026-09-20: CASE ESCALATED - Conflicting scheduling responses, unable to book autonomously"
+      ]
+    },
+    {
+      "id": "ESC-006",
+      "patient_id": "PAT-10445",
+      "patient_name": "David Tan",
+      "treatment_type": "emergency",
+      "days_overdue": 14,
+      "urgency": "critical",
+      "reason": "Emergency follow-up case. Patient reported severe toothache via WhatsApp and requested immediate appointment. Agent could not autonomously schedule emergency slot. Requires staff coordination for same-day emergency care.",
+      "priority": "critical",
+      "escalated_at": "2026-09-21T10:05:00",
+      "conversation_log": [
+        "2026-09-15: Patient sent WhatsApp: \"HELP! My tooth is killing me! I cant sleep! Is there any emergency appointment today???\"",
+        "2026-09-15: Agent detected emergency intent and severe distress",
+        "2026-09-15: Patient sent: \"Please help! The pain is getting worse!\"",
+        "2026-09-21: CASE ESCALATED - Emergency case with severe patient distress, requires immediate human intervention"
+      ]
+    },
+    {
+      "id": "ESC-007",
+      "patient_id": "PAT-10567",
+      "patient_name": "Aisyah Rahman",
+      "treatment_type": "cleaning",
+      "days_overdue": 90,
+      "urgency": "medium",
+      "reason": "Routine cleaning overdue for 90 days. Patient has been unresponsive to automated reminders for 3 months. May have moved or changed contact information. Staff needs to verify patient contact details and re-engage.",
+      "priority": "normal",
+      "escalated_at": "2026-09-12T13:00:00",
+      "conversation_log": [
+        "2026-06-15: SMS reminder sent - \"Hi Aisyah, your dental cleaning is due.\"",
+        "2026-07-15: SMS reminder sent - \"Reminder: Your dental cleaning is now 30 days overdue.\"",
+        "2026-08-15: SMS reminder sent - \"Your cleaning is 60 days overdue. Please contact us.\"",
+        "2026-09-12: CASE ESCALATED - 90 days overdue, no response to 3 months of automated reminders"
+      ]
+    },
+    {
+      "id": "ESC-008",
+      "patient_id": "PAT-10623",
+      "patient_name": "Maria Santos",
+      "treatment_type": "pediatric",
+      "days_overdue": 25,
+      "urgency": "high",
+      "reason": "Pediatric follow-up case. Parent contacted via email asking about child braces adjustment and insurance coverage. Email thread contains complex clinical and billing questions. Requires staff with pediatric and billing expertise.",
+      "priority": "high",
+      "escalated_at": "2026-09-17T15:30:00",
+      "conversation_log": [
+        "2026-09-01: Email sent - \"Hi Maria, your child Lucas has a overdue pediatric check-up.\"",
+        "2026-09-03: Parent replied: \"Hi, Lucas has been complaining about his braces being tight. Also, can you tell me if our insurance covers the braces adjustment? We need to know before we come in. What documents do we need?\"",
+        "2026-09-17: CASE ESCALATED - Complex clinical and billing inquiry for pediatric patient"
+      ]
+    }
+  ]
+}
