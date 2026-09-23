@@ -135,6 +135,7 @@ Setup:
 .venv/bin/pip install boto3            # required by the two AWS tools only
 export AWS_REGION=ap-southeast-1
 export AWS_SES_SOURCE=martinchenonly1@gmail.com
+export AWS_SES_CONFIGURATION_SET=patient-followup   # makes delivery verifiable
 export AWS_SMS_ALLOWED_NUMBERS=+6583536885
 export AWS_EMAIL_ALLOWED_ADDRESSES=martinchenonly1@gmail.com
 ```

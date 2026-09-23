@@ -291,6 +291,12 @@ return `config_missing`, and the offline demo, the tests and every other tool
 keep working. Dry-run mode short-circuits before the client is resolved, so no
 session is created and no credentials are read.
 
+`send_email` also honours the optional `AWS_SES_CONFIGURATION_SET`. Without it
+SES reports only that the message was *accepted* (`MessageId`), which is not the
+same as *delivered*; with it SES emits per-send `Delivery` / `Bounce` /
+`Complaint` events to the configured destination (CloudWatch metrics and an SNS
+topic), so delivery can be verified rather than assumed.
+
 ### Dry-run semantics
 
 Live sending is **opt-in**. `MESSAGING_DRY_RUN=0` is the only thing that permits

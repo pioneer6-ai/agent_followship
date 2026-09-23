@@ -200,9 +200,9 @@ class MessagingConfig:
         meta_*: Meta WhatsApp Cloud API settings.
         twilio_*: Twilio settings (shared by WhatsApp and SMS).
         smtp_* / email_from: Outbound email settings.
-        aws_* / aws_sms_allowlist / aws_email_allowlist: AWS region, SES sender
-            and the verified-recipient allow-lists enforced by ``send_sms`` /
-            ``send_email``.
+        aws_* / aws_sms_allowlist / aws_email_allowlist: AWS region, SES sender,
+            SES configuration set and the verified-recipient allow-lists
+            enforced by ``send_sms`` / ``send_email``.
     """
 
     # Channel selection
@@ -245,6 +245,11 @@ class MessagingConfig:
     # by the ``send_sms`` / ``send_email`` tools before any API call is made.
     aws_region: str = "ap-southeast-1"
     aws_ses_source: str = "martinchenonly1@gmail.com"
+    #: Optional SES configuration set. When set, every ``send_email`` call is
+    #: tagged with it so SES publishes per-send Delivery/Bounce/Complaint
+    #: events -- the only way to prove a message was delivered rather than
+    #: merely accepted.
+    aws_ses_configuration_set: Optional[str] = None
     aws_sms_origination_identity: Optional[str] = None
     aws_sms_allowlist: List[str] = field(
         default_factory=lambda: ["+6583536885"]
@@ -314,6 +319,9 @@ class MessagingConfig:
                 source.get("AWS_SES_SOURCE") or ""
             ).strip()
             or "martinchenonly1@gmail.com",
+            aws_ses_configuration_set=(
+                str(source.get("AWS_SES_CONFIGURATION_SET") or "").strip() or None
+            ),
             aws_sms_origination_identity=(
                 str(source.get("AWS_SMS_ORIGINATION_IDENTITY") or "").strip()
                 or None

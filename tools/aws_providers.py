@@ -323,6 +323,10 @@ class AwsSesEmailProvider(_AwsProvider):
         """
         Call ``SendEmail`` with a plain-text body.
 
+        ``ConfigurationSetName`` is added only when configured: without it SES
+        accepts the message but emits no per-send events, so there is no way to
+        tell "accepted" from "delivered".
+
         Args:
             client: The ``ses`` client.
             request: The message to deliver.
@@ -330,11 +334,15 @@ class AwsSesEmailProvider(_AwsProvider):
         Returns:
             The API response, which carries ``MessageId``.
         """
-        return client.send_email(
-            Source=self.config.aws_ses_source,
-            Destination={"ToAddresses": [request.to]},
-            Message={
+        kwargs: Dict[str, Any] = {
+            "Source": self.config.aws_ses_source,
+            "Destination": {"ToAddresses": [request.to]},
+            "Message": {
                 "Subject": {"Data": request.subject or ""},
                 "Body": {"Text": {"Data": request.body or ""}},
             },
-        )
+        }
+        if self.config.aws_ses_configuration_set:
+            kwargs["ConfigurationSetName"] = self.config.aws_ses_configuration_set
+
+        return client.send_email(**kwargs)

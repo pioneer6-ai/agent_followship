@@ -335,6 +335,42 @@ Delivery notes:
   `config_missing` -- they never raise `ImportError`.
 - Live sending stays opt-in: `MESSAGING_DRY_RUN=0`.
 
+### Proving a message was delivered
+
+An SES `MessageId` only means *accepted*: it says nothing about whether the
+message reached the inbox. To close that gap, set `AWS_SES_CONFIGURATION_SET` to
+an SES configuration set with an event destination. Every send is then tagged
+with it and SES emits per-send `Delivery` / `Bounce` / `Complaint` events.
+
+This project ships one for the verified test address:
+`patient-followup`, with an SNS event destination publishing to
+`ses-delivery-events` (email subscription to `martinchenonly1@gmail.com`).
+
+```bash
+export AWS_SES_CONFIGURATION_SET=patient-followup
+```
+
+Events are also readable programmatically from CloudWatch -- namespace
+`AWS/SES`, metric `Delivery` / `Bounce` / `Complaint`, dimension
+`ses:configuration-set=patient-followup`:
+
+```bash
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/SES --metric-name Delivery --period 3600 --statistics Sum \
+  --start-time "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
+  --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --dimensions Name=ses:configuration-set,Value=patient-followup
+```
+
+### Deliverability
+
+`AWS_SES_SOURCE` is currently the recipient's own `gmail.com` address, and the
+message is relayed by SES, so it carries **no Gmail DKIM signature**. Gmail's
+DMARC policy is `p=none`, so it is not rejected -- but it is very likely filed
+as spam (observed: delivered, but into the spam folder). Verify a domain you own
+in SES and point `AWS_SES_SOURCE` at it to fix placement; the tool code needs no
+change.
+
 One operational gotcha: if your AWS CLI is signed in with `aws login` (a
 `login_session` entry in `~/.aws/config`), **botocore cannot read it** and both
 tools will report `config_missing` with `NoCredentialsError` even though the CLI

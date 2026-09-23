@@ -178,6 +178,43 @@ class TestSendEmailHappyPath:
         assert len(fake_email.calls) == 1
 
 
+class TestSesConfigurationSet:
+    """The optional SES configuration set makes delivery verifiable."""
+
+    def test_omitted_by_default(self, registry, fake_email):
+        registry.call("send_email", email_args())
+
+        assert "ConfigurationSetName" not in fake_email.calls[0]
+
+    def test_passed_through_when_configured(self, fake_sms, fake_email):
+        env = dict(AWS_ENV)
+        env["MESSAGING_DRY_RUN"] = "0"
+        env["AWS_SES_CONFIGURATION_SET"] = "patient-followup"
+        reg = make_registry(env, aws_clients={"sms": fake_sms, "email": fake_email})
+
+        reg.call("send_email", email_args())
+
+        assert fake_email.calls[0]["ConfigurationSetName"] == "patient-followup"
+
+    def test_does_not_leak_into_the_sms_request(self, fake_sms, fake_email):
+        env = dict(AWS_ENV)
+        env["MESSAGING_DRY_RUN"] = "0"
+        env["AWS_SES_CONFIGURATION_SET"] = "patient-followup"
+        reg = make_registry(env, aws_clients={"sms": fake_sms, "email": fake_email})
+
+        reg.call("send_sms", sms_args())
+
+        assert "ConfigurationSetName" not in fake_sms.calls[0]
+
+    def test_blank_value_means_unset(self):
+        env = {"AWS_SES_CONFIGURATION_SET": "   "}
+
+        assert MessagingConfig.from_env(env).aws_ses_configuration_set is None
+
+    def test_defaults_to_unset(self):
+        assert MessagingConfig.from_env({}).aws_ses_configuration_set is None
+
+
 class TestAllowList:
     """The verified-recipient allow-list is a hard, fail-closed gate."""
 
