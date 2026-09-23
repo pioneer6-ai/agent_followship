@@ -297,6 +297,14 @@ same as *delivered*; with it SES emits per-send `Delivery` / `Bounce` /
 `Complaint` events to the configured destination (CloudWatch metrics and an SNS
 topic), so delivery can be verified rather than assumed.
 
+`AWS_SES_SOURCE` selects the sender identity, and is the lever for
+deliverability. Sending from an address whose domain SES cannot sign produces
+mail with no DKIM signature for its own From domain, which inbox providers file
+as spam; sending from an SES-verified domain does not. Because the sender is
+configuration rather than code, switching to an owned domain is an environment
+change -- `scripts/ses_domain_setup.py` creates the identity and prints the DNS
+records to publish.
+
 ### Dry-run semantics
 
 Live sending is **opt-in**. `MESSAGING_DRY_RUN=0` is the only thing that permits

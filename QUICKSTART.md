@@ -140,6 +140,18 @@ export AWS_SMS_ALLOWED_NUMBERS=+6583536885
 export AWS_EMAIL_ALLOWED_ADDRESSES=martinchenonly1@gmail.com
 ```
 
+`AWS_SES_SOURCE` here is the recipient's own Gmail address, which is only good
+for smoke tests -- such mail carries no DKIM signature for the domain it claims
+to come from and is filed as spam. To fix placement, verify a domain you own and
+send from it (the tool code needs no change):
+
+```bash
+.venv/bin/python scripts/ses_domain_setup.py clinic.example.com --create
+# add the printed DNS records, wait, then:
+.venv/bin/python scripts/ses_domain_setup.py clinic.example.com --check
+export AWS_SES_SOURCE=reminders@clinic.example.com
+```
+
 Credentials come from the standard boto3 chain, with one caveat: a CLI
 `login_session` (`aws login`) is invisible to botocore, so export it first --
 otherwise the tools report `config_missing` with `NoCredentialsError`.

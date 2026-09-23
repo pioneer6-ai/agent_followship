@@ -364,12 +364,43 @@ aws cloudwatch get-metric-statistics \
 
 ### Deliverability
 
-`AWS_SES_SOURCE` is currently the recipient's own `gmail.com` address, and the
-message is relayed by SES, so it carries **no Gmail DKIM signature**. Gmail's
-DMARC policy is `p=none`, so it is not rejected -- but it is very likely filed
-as spam (observed: delivered, but into the spam folder). Verify a domain you own
-in SES and point `AWS_SES_SOURCE` at it to fix placement; the tool code needs no
-change.
+`AWS_SES_SOURCE` defaults to the recipient's own `gmail.com` address. That works
+for smoke tests but is bad for placement: the message claims to be from
+`@gmail.com` while being relayed by SES, so it carries **no Gmail DKIM
+signature**. Gmail's DMARC policy is `p=none`, so it is not rejected -- but it is
+filed as spam (observed: delivered, but into the spam folder).
+
+The fix is to send from a domain you own, which SES then signs with that
+domain's DKIM key. `scripts/ses_domain_setup.py` creates the identity and prints
+the DNS records to add:
+
+```bash
+export AWS_REGION=ap-southeast-1
+.venv/bin/python scripts/ses_domain_setup.py clinic.example.com --create
+```
+
+It prints the three Easy DKIM CNAMEs (required), an SPF `TXT` and a DMARC `TXT`
+(both recommended -- Gmail and Outlook score them even though SES does not read
+them), and an optional custom MAIL FROM pair. Add them at your DNS provider,
+wait for propagation, then confirm:
+
+```bash
+.venv/bin/python scripts/ses_domain_setup.py clinic.example.com --check
+# verified for sending: True
+```
+
+Then point the agent at the domain -- **no tool code changes**, both values are
+read from the environment:
+
+```bash
+export AWS_SES_SOURCE=reminders@clinic.example.com
+export AWS_EMAIL_ALLOWED_ADDRESSES=martinchenonly1@gmail.com
+```
+
+Two caveats while the account is still in the SES sandbox: every recipient must
+be a verified identity, and you can only send from verified identities, so the
+domain must reach `verified for sending: True` before it can be used as
+`AWS_SES_SOURCE`.
 
 One operational gotcha: if your AWS CLI is signed in with `aws login` (a
 `login_session` entry in `~/.aws/config`), **botocore cannot read it** and both
