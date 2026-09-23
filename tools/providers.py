@@ -38,6 +38,7 @@ from tools.errors import (
     SendErrorCode,
     from_http_status,
 )
+from tools.tls import default_ssl_context
 from tools.transport import HttpResponse, HttpTransport, UrllibTransport
 
 
@@ -506,7 +507,7 @@ class SmtpEmailProvider(MessageProvider):
         if self.config.smtp_use_ssl:
             return smtplib.SMTP_SSL(
                 timeout=self.config.timeout_seconds,
-                context=ssl.create_default_context(),
+                context=default_ssl_context(),
             )
         return smtplib.SMTP(timeout=self.config.timeout_seconds)
 
@@ -544,7 +545,7 @@ class SmtpEmailProvider(MessageProvider):
                 connection.connect(self.config.smtp_host, self.config.smtp_port)
                 connection.ehlo()
                 if self.config.smtp_use_tls and not self.config.smtp_use_ssl:
-                    connection.starttls(context=ssl.create_default_context())
+                    connection.starttls(context=default_ssl_context())
                     connection.ehlo()
                 if self.config.smtp_username:
                     connection.login(

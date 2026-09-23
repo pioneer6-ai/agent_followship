@@ -142,15 +142,22 @@ export AWS_EMAIL_ALLOWED_ADDRESSES=martinchenonly1@gmail.com
 
 `AWS_SES_SOURCE` here is the recipient's own Gmail address, which is only good
 for smoke tests -- such mail carries no DKIM signature for the domain it claims
-to come from and is filed as spam. To fix placement, verify a domain you own and
-send from it (the tool code needs no change):
+to come from and is filed as spam.
+
+To land in the inbox **without any DNS work**, use the SMTP channel instead:
+mail relayed by Gmail is signed by Google. Get an App Password at
+<https://myaccount.google.com/apppasswords> (needs 2-Step Verification), then:
 
 ```bash
-.venv/bin/python scripts/ses_domain_setup.py clinic.example.com --create
-# add the printed DNS records, wait, then:
-.venv/bin/python scripts/ses_domain_setup.py clinic.example.com --check
-export AWS_SES_SOURCE=reminders@clinic.example.com
+export SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_USE_TLS=1
+export SMTP_USERNAME=martinchenonly1@gmail.com
+export SMTP_PASSWORD=<16-character app password>
+export EMAIL_FROM=martinchenonly1@gmail.com
 ```
+
+and call `send_email_message` instead of `send_email`. If you *do* control a
+domain's DNS, `scripts/ses_domain_setup.py clinic.example.com --create` prints
+the records that let the SES path be verified too.
 
 Credentials come from the standard boto3 chain, with one caveat: a CLI
 `login_session` (`aws login`) is invisible to botocore, so export it first --

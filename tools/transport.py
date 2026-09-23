@@ -22,6 +22,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from tools.tls import default_ssl_context
+
 
 @dataclass
 class HttpResponse:
@@ -150,7 +152,9 @@ class UrllibTransport:
             return int((time.perf_counter() - start) * 1000)
 
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(
+                request, timeout=timeout, context=default_ssl_context()
+            ) as response:
                 return HttpResponse(
                     status_code=response.status,
                     body=_decode(response.read()),

@@ -9,6 +9,10 @@ error code is genuinely covered.
 from __future__ import annotations
 import base64
 import json
+import smtplib
+import ssl
+import urllib.request
+from pathlib import Path
 from typing import Any, Dict
 
 import pytest
@@ -407,3 +411,126 @@ class TestProviderAssembly:
         )
         assert result.success is False
         assert result.error_code is SendErrorCode.PROVIDER_UNAVAILABLE
+
+
+class TestTlsTrust:
+    """
+    TLS must verify peers on a machine whose system trust store is empty.
+
+    A macOS python.org install ships no CAs until ``Install Certificates`` is
+    run, and the failure it causes (``unable to get local issuer certificate``)
+    is indistinguishable from a provider outage at the call site. These tests
+    pin the bundle-selection rules that keep real sends working.
+    """
+
+    def test_ssl_cert_file_wins_when_it_exists(self, tmp_path, monkeypatch) -> None:
+        from tools import tls
+
+        bundle = tmp_path / "custom.pem"
+        bundle.write_text("dummy")
+        monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+        assert tls.ca_bundle_path() == str(bundle)
+
+    def test_missing_ssl_cert_file_falls_back_to_certifi(self, monkeypatch) -> None:
+        from tools import tls
+
+        monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent/nowhere.pem")
+        resolved = tls.ca_bundle_path()
+        # Either certifi supplied a real file, or no bundle is available at all;
+        # what must never happen is pointing OpenSSL at a file that is not there.
+        assert resolved is None or Path(resolved).is_file()
+
+    def test_certifi_bundle_is_used_when_present(self, monkeypatch) -> None:
+        from tools import tls
+
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        try:
+            import certifi
+        except ImportError:
+            pytest.skip("certifi is not installed")
+        assert tls.ca_bundle_path() == certifi.where()
+
+    def test_context_can_actually_verify_peers(self) -> None:
+        from tools import tls
+
+        context = tls.default_ssl_context()
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+        assert context.cert_store_stats()["x509_ca"] > 0
+
+    def test_context_is_reused(self) -> None:
+        from tools import tls
+
+        assert tls.default_ssl_context() is tls.default_ssl_context()
+
+    def test_reset_cache_drops_the_context(self) -> None:
+        from tools import tls
+
+        first = tls.default_ssl_context()
+        tls.reset_cache()
+        try:
+            assert tls.default_ssl_context() is not first
+        finally:
+            tls.reset_cache()
+
+    def test_smtp_over_ssl_uses_the_verifying_context(self, env: dict, monkeypatch) -> None:
+        from tools import tls
+
+        env["SMTP_USE_SSL"] = "1"
+        env["SMTP_USE_TLS"] = "0"
+        captured: Dict[str, Any] = {}
+
+        def fake_smtp_ssl(**kwargs: Any) -> FakeSmtpConnection:
+            captured.update(kwargs)
+            return FakeSmtpConnection()
+
+        monkeypatch.setattr(smtplib, "SMTP_SSL", fake_smtp_ssl)
+        SmtpEmailProvider(MessagingConfig.from_env(env))._default_factory()
+        assert captured["context"] is tls.default_ssl_context()
+
+    def test_starttls_uses_the_verifying_context(self, env: dict, monkeypatch) -> None:
+        from tools import tls
+
+        env["SMTP_USE_SSL"] = "0"
+        env["SMTP_USE_TLS"] = "1"
+        captured: Dict[str, Any] = {}
+
+        class RecordingSmtp(FakeSmtpConnection):
+            def starttls(self, **kwargs: Any) -> Any:
+                captured.update(kwargs)
+                self.transcript.append("starttls")
+                return (220, b"ready")
+
+        monkeypatch.setattr(smtplib, "SMTP", lambda **kwargs: RecordingSmtp())
+        provider = SmtpEmailProvider(MessagingConfig.from_env(env))
+        outcome = provider.send(SendRequest(to=EMAIL, body="x"))
+        assert outcome.success is True
+        assert captured["context"] is tls.default_ssl_context()
+
+    def test_urllib_transport_passes_a_context(self, monkeypatch) -> None:
+        from tools import tls
+        from tools.transport import UrllibTransport
+
+        captured: Dict[str, Any] = {}
+
+        class FakeResponse:
+            status = 200
+            headers: Dict[str, str] = {}
+
+            def read(self) -> bytes:
+                return b'{"ok": true}'
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *exc: Any) -> None:
+                return None
+
+        def fake_urlopen(request: Any, **kwargs: Any) -> FakeResponse:
+            captured.update(kwargs)
+            return FakeResponse()
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        response = UrllibTransport().post_json("https://example.test/hook")
+        assert response.status_code == 200
+        assert captured["context"] is tls.default_ssl_context()

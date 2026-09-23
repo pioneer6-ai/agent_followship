@@ -370,37 +370,50 @@ for smoke tests but is bad for placement: the message claims to be from
 signature**. Gmail's DMARC policy is `p=none`, so it is not rejected -- but it is
 filed as spam (observed: delivered, but into the spam folder).
 
-The fix is to send from a domain you own, which SES then signs with that
-domain's DKIM key. `scripts/ses_domain_setup.py` creates the identity and prints
-the DNS records to add:
+Fixing that properly means sending from a domain you own, which SES then signs
+with that domain's DKIM key: `scripts/ses_domain_setup.py` creates the identity
+and prints the DNS records to add.
 
 ```bash
-export AWS_REGION=ap-southeast-1
 .venv/bin/python scripts/ses_domain_setup.py clinic.example.com --create
-```
-
-It prints the three Easy DKIM CNAMEs (required), an SPF `TXT` and a DMARC `TXT`
-(both recommended -- Gmail and Outlook score them even though SES does not read
-them), and an optional custom MAIL FROM pair. Add them at your DNS provider,
-wait for propagation, then confirm:
-
-```bash
+# add the printed records at your DNS provider, wait, then:
 .venv/bin/python scripts/ses_domain_setup.py clinic.example.com --check
-# verified for sending: True
+export AWS_SES_SOURCE=reminders@clinic.example.com
 ```
 
-Then point the agent at the domain -- **no tool code changes**, both values are
-read from the environment:
+That route needs **control of the domain's DNS**. Where there is none -- a
+hackathon account, a shared domain -- use the SMTP channel instead, with the
+mailbox's own provider as the relay. Mail sent through Gmail's SMTP is signed by
+Google, so it lands in the inbox with no DNS work at all. The
+`send_email_message` tool already speaks SMTP:
 
 ```bash
-export AWS_SES_SOURCE=reminders@clinic.example.com
-export AWS_EMAIL_ALLOWED_ADDRESSES=martinchenonly1@gmail.com
+export SMTP_HOST=smtp.gmail.com
+export SMTP_PORT=587
+export SMTP_USE_TLS=1
+export SMTP_USERNAME=martinchenonly1@gmail.com
+export SMTP_PASSWORD=your-16-character-app-password   # not your account password
+export EMAIL_FROM=martinchenonly1@gmail.com
+export MESSAGING_DRY_RUN=0
 ```
 
-Two caveats while the account is still in the SES sandbox: every recipient must
-be a verified identity, and you can only send from verified identities, so the
-domain must reach `verified for sending: True` before it can be used as
-`AWS_SES_SOURCE`.
+Gmail rejects account passwords over SMTP: enable 2-Step Verification, then
+create an App Password at <https://myaccount.google.com/apppasswords>.
+
+Two caveats apply to the SES path while the account is in the sandbox: every
+recipient must be a verified identity, and you can only send from verified
+identities, so a domain must reach `verified for sending: True` before it can be
+used as `AWS_SES_SOURCE`.
+
+### TLS trust stores
+
+Providers build their TLS contexts through `tools/tls.py`, which prefers a CA
+bundle that actually exists: `SSL_CERT_FILE`, then `certifi`, then the system
+store. This matters because `ssl.create_default_context()` reads the *system*
+store, and a macOS python.org install leaves it empty until `Install
+Certificates.command` is run -- so every live send fails with
+`CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate`, which looks
+exactly like a provider outage. Set `SSL_CERT_FILE` to override the bundle.
 
 One operational gotcha: if your AWS CLI is signed in with `aws login` (a
 `login_session` entry in `~/.aws/config`), **botocore cannot read it** and both

@@ -26,6 +26,12 @@ boto3==1.35.36
 pytest==7.4.3
 pytest-cov==4.1.0
 
+# TLS trust store for outbound HTTPS/SMTP. Optional at import time (tools/tls.py
+# falls back to the system store), but a macOS python.org install ships no CAs
+# until "Install Certificates" is run, so every live send fails with
+# CERTIFICATE_VERIFY_FAILED without it.
+certifi==2026.7.22
+
 # Code Quality
 flake8==6.1.0
 black==23.12.1
