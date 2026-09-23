@@ -14,7 +14,7 @@ response with ``status_code == 0`` plus an ``error`` string.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from email.message import EmailMessage
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 import json
 import smtplib
 import time
@@ -295,6 +295,8 @@ class FakeSmtpConnection:
     Attributes:
         sent: Messages that reached :meth:`send_message`.
         transcript: Every method call, for assertions.
+        login_credentials: ``(username, password)`` seen by :meth:`login`, or
+            ``None`` when no authentication was attempted.
     """
 
     def __init__(
@@ -320,6 +322,7 @@ class FakeSmtpConnection:
         self.disconnect_on_quit = disconnect_on_quit
         self.sent: List[Any] = []
         self.transcript: List[str] = []
+        self.login_credentials: Optional[Tuple[str, str]] = None
         self.closed = False
         self.tls_started = False
 
@@ -344,6 +347,7 @@ class FakeSmtpConnection:
     def login(self, username: str, password: str) -> Any:
         """Record and (maybe) fail authentication."""
         self.transcript.append(f"login:{username}")
+        self.login_credentials = (username, password)
         if self.auth_failure:
             raise smtplib.SMTPAuthenticationError(
                 535, b"5.7.8 Username and Password not accepted"

@@ -186,6 +186,27 @@ def _digits(value: Any) -> str:
     return re.sub(r"\D", "", str(value or ""))
 
 
+def _normalize_app_password(value: Any) -> Optional[str]:
+    """
+    Drop the display spaces from an application password.
+
+    Gmail and other providers show app passwords in groups (``abcd efgh ijkl
+    mnop``) but the SMTP ``AUTH`` exchange wants the 16 characters with no
+    separators: a spaced password makes Gmail hang up mid-connection, which
+    surfaces as a confusing ``provider_unavailable`` rather than a bad
+    credential. Normalization only applies when the value is unambiguously an
+    app password -- exactly 16 alphanumerics once whitespace is removed -- so a
+    conventional password is passed through untouched.
+    """
+    if value is None:
+        return None
+    text = str(value)
+    squashed = re.sub(r"\s+", "", text)
+    if squashed != text and len(squashed) == 16 and squashed.isalnum():
+        return squashed
+    return text
+
+
 @dataclass
 class MessagingConfig:
     """
@@ -307,7 +328,7 @@ class MessagingConfig:
             smtp_host=source.get("SMTP_HOST"),
             smtp_port=_env_int(source, "SMTP_PORT", 587),
             smtp_username=source.get("SMTP_USERNAME"),
-            smtp_password=source.get("SMTP_PASSWORD"),
+            smtp_password=_normalize_app_password(source.get("SMTP_PASSWORD")),
             smtp_use_tls=bool(_env_bool(source, "SMTP_USE_TLS", True)),
             smtp_use_ssl=bool(_env_bool(source, "SMTP_USE_SSL", False)),
             email_from=source.get("EMAIL_FROM") or source.get("SMTP_USERNAME"),

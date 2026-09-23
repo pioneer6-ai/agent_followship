@@ -534,3 +534,43 @@ class TestTlsTrust:
         response = UrllibTransport().post_json("https://example.test/hook")
         assert response.status_code == 200
         assert captured["context"] is tls.default_ssl_context()
+
+
+class TestAppPasswordNormalization:
+    """
+    An app password pasted with its display spaces must still work.
+
+    Google shows app passwords grouped ("abcd efgh ijkl mnop") but the SMTP
+    exchange wants the bare 16 characters; sending the spaced form makes Gmail
+    drop the connection, which reads as ``provider_unavailable`` instead of the
+    bad-credential it really is.
+    """
+
+    def test_grouped_app_password_loses_its_spaces(self, env: dict) -> None:
+        env["SMTP_PASSWORD"] = "abcd efgh ijkl mnop"
+        assert MessagingConfig.from_env(env).smtp_password == "abcdefghijklmnop"
+
+    def test_password_is_used_verbatim_when_it_has_no_spaces(self, env: dict) -> None:
+        env["SMTP_PASSWORD"] = "abcdefghijklmnop"
+        assert MessagingConfig.from_env(env).smtp_password == "abcdefghijklmnop"
+
+    def test_conventional_password_is_not_rewritten(self, env: dict) -> None:
+        env["SMTP_PASSWORD"] = "correct horse battery staple"
+        assert MessagingConfig.from_env(env).smtp_password == "correct horse battery staple"
+
+    def test_wrong_length_app_password_is_left_alone(self, env: dict) -> None:
+        # 17 characters once squashed: not an app password, so do not guess.
+        env["SMTP_PASSWORD"] = "abcd efgh ijkl mnopq"
+        assert MessagingConfig.from_env(env).smtp_password == "abcd efgh ijkl mnopq"
+
+    def test_missing_password_stays_none(self, env: dict) -> None:
+        env.pop("SMTP_PASSWORD", None)
+        assert MessagingConfig.from_env(env).smtp_password is None
+
+    def test_normalized_password_reaches_the_login(self, env: dict) -> None:
+        env["SMTP_PASSWORD"] = "abcd efgh ijkl mnop"
+        smtp = FakeSmtpConnection()
+        SmtpEmailProvider(MessagingConfig.from_env(env), lambda: smtp).send(
+            SendRequest(to=EMAIL, body="x")
+        )
+        assert smtp.login_credentials == (env["SMTP_USERNAME"], "abcdefghijklmnop")
