@@ -44,6 +44,20 @@ CONFIGURED_ENV: Dict[str, str] = {
 PHONE = "+15550001111"
 EMAIL = "patient@example.com"
 
+#: The two verified test recipients the AWS tools are allowed to reach.
+AWS_TEST_PHONE = "+6583536885"
+AWS_TEST_EMAIL = "martinchenonly1@gmail.com"
+
+#: AWS configuration for the allow-listed test recipients. ``AWS_REGION`` and
+#: the allow-lists are pinned so the AWS tools behave identically regardless of
+#: the developer's own ``.env``/``~/.aws/config``.
+AWS_ENV: Dict[str, str] = {
+    "AWS_REGION": "ap-southeast-1",
+    "AWS_SES_SOURCE": AWS_TEST_EMAIL,
+    "AWS_SMS_ALLOWED_NUMBERS": AWS_TEST_PHONE,
+    "AWS_EMAIL_ALLOWED_ADDRESSES": AWS_TEST_EMAIL,
+}
+
 
 @pytest.fixture
 def env() -> Dict[str, str]:
@@ -69,6 +83,7 @@ def make_registry(
     transport: FakeTransport = None,
     smtp: FakeSmtpConnection = None,
     escalation_log: EscalationLog = None,
+    aws_clients: Dict[str, Any] = None,
 ) -> Any:
     """
     Build a registry wired to offline doubles.
@@ -78,6 +93,9 @@ def make_registry(
         transport: Scripted HTTP responses.
         smtp: Scripted SMTP connection.
         escalation_log: Escalation sink to inspect afterwards.
+        aws_clients: ``{"sms": client, "email": client}`` fake boto3 clients for
+            the AWS tools; omitted means the real boto3 client would be built,
+            which no test should reach.
 
     Returns:
         The configured :class:`~tools.messaging.ToolRegistry`.
@@ -87,6 +105,7 @@ def make_registry(
         transport=transport if transport is not None else FakeTransport(),
         smtp_connection_factory=(lambda: smtp) if smtp is not None else None,
         escalation_log=escalation_log or EscalationLog(),
+        aws_clients=aws_clients,
     )
 
 

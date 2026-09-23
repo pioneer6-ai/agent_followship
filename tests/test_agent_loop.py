@@ -117,6 +117,8 @@ class TestToolSchemas:
             "send_whatsapp_message",
             "send_sms_message",
             "send_email_message",
+            "send_sms",
+            "send_email",
         ):
             description = schemas[name]["description"]
             assert "never raises" in description
@@ -139,6 +141,9 @@ class TestToolSchemas:
             schema = schemas[name]
             assert schema["input_schema"]["type"] == "object"
         assert "recipient" in schemas["send_sms_message"]["input_schema"]["required"]
+        # The AWS tools name the recipient differently but still require it.
+        assert "phone_number" in schemas["send_sms"]["input_schema"]["required"]
+        assert "to_email" in schemas["send_email"]["input_schema"]["required"]
 
     def test_schema_subset_selection(self) -> None:
         schemas = get_tool_schemas(["send_sms_message", "escalate_to_staff"])

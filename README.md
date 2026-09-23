@@ -276,7 +276,7 @@ LLM Agent (Claude API, tool use)
 send_whatsapp_message(phone, template, params)   ← deterministic function
      │  exactly one provider attempt
      ▼
-WhatsApp Business API / Twilio / SMTP email
+WhatsApp Business API / Twilio / Amazon SES / AWS End User Messaging
 ```
 
 ### Available tools
@@ -286,9 +286,74 @@ WhatsApp Business API / Twilio / SMTP email
 | `send_whatsapp_message` | Send a templated WhatsApp message |
 | `send_sms_message` | Send an SMS message |
 | `send_email_message` | Send an email message |
+| `send_sms` | Send an SMS through AWS End User Messaging (allow-listed) |
+| `send_email` | Send an email through Amazon SES (allow-listed) |
 | `get_candidate_send_channels` | Which channels are usable for a patient |
 | `list_message_templates` | Templates and their required parameters |
 | `escalate_to_staff` | Hand the case to a human with a reason |
+
+#### `send_sms` and `send_email` (real AWS delivery)
+
+These two are the production transports. They take a `reason` -- the agent's
+justification -- which is printed to stdout as `[Agent决策] ...`, written to the
+audit trail and echoed back in `data.reason`.
+
+```python
+registry.call("send_sms", {
+    "phone_number": "+6583536885",
+    "message": "Hi! This is Bright Smile: time for your 6-month check-up.",
+    "reason": "patient is 7 months past their last visit",
+})
+# -> {'status': 'sent', 'message_id': '...'}   on success
+# -> {'status': 'failed', 'error': '...'}      plus the guidance fields below
+
+registry.call("send_email", {
+    "to_email": "martinchenonly1@gmail.com",
+    "subject": "Time for your check-up",
+    "body": "Our records show it has been a while since your last visit.",
+    "reason": "no reply to the SMS reminder",
+})
+```
+
+Both declare `phone_number` / `to_email` as **required** in their schema so the
+contract does not change when real patient data arrives. Today, however, the
+clinic's AWS account is still sandboxed, so the tools refuse to transmit to
+anything outside the verified-recipient allow-list (`AWS_SMS_ALLOWED_NUMBERS` /
+`AWS_EMAIL_ALLOWED_ADDRESSES`, defaulting to one verified phone number and one
+verified email). A refused recipient comes back as `recipient_not_verified`
+with `provider_code: "allowlist"` -- the same shape the model already knows how
+to fall back from, so it will switch channel instead of crashing.
+
+Delivery notes:
+
+- `send_sms` calls `pinpoint-sms-voice-v2.send_text_message` with
+  `MessageType="TRANSACTIONAL"`; the account must be onboarded to AWS End User
+  Messaging SMS first, otherwise it returns `not_subscribed`.
+- `send_email` calls `ses.send_email` from `AWS_SES_SOURCE`, which must be an
+  SES-verified identity.
+- Both require `boto3` (`pip install boto3`). Without it they report
+  `config_missing` -- they never raise `ImportError`.
+- Live sending stays opt-in: `MESSAGING_DRY_RUN=0`.
+
+One operational gotcha: if your AWS CLI is signed in with `aws login` (a
+`login_session` entry in `~/.aws/config`), **botocore cannot read it** and both
+tools will report `config_missing` with `NoCredentialsError` even though the CLI
+works. Export the credentials the SDK can consume:
+
+```bash
+eval "$(aws configure export-credentials --export-env)"
+# or, without exporting into your shell:
+.venv/bin/python - <<'PY'
+import json, os, subprocess
+creds = json.loads(subprocess.check_output(
+    ["aws", "configure", "export-credentials"], text=True))
+os.environ.update({
+    "AWS_ACCESS_KEY_ID": creds["AccessKeyId"],
+    "AWS_SECRET_ACCESS_KEY": creds["SecretAccessKey"],
+    "AWS_SESSION_TOKEN": creds["SessionToken"],
+})
+PY
+```
 
 ### The failure protocol
 
@@ -324,7 +389,12 @@ the decision with the model while the mechanics stay deterministic.
 Normalized error codes: `recipient_not_verified`, `invalid_recipient`,
 `opted_out`, `outside_messaging_window`, `template_not_found`,
 `template_param_mismatch`, `rate_limited`, `auth_failed`, `config_missing`,
-`provider_unavailable`, `network_error`, `invalid_request`, `unknown`.
+`not_subscribed`, `provider_unavailable`, `network_error`, `invalid_request`,
+`unknown`.
+
+`not_subscribed` is specific to the AWS tools: the account is not onboarded to
+the service, which the agent cannot fix, so it is non-retryable with no
+fallback channels and the hint tells the model to escalate to staff.
 
 ### Quick start
 
@@ -389,6 +459,27 @@ fails loudly with `config_missing` rather than pretending to send.
 | unset / `1`         | anything    | simulated success, no network call |
 | `0`                 | present     | real provider call |
 | `0`                 | missing     | `failed` / `config_missing` |
+
+The AWS tools are the one exception to "credentials are enough": because the
+account is sandboxed, `send_sms` / `send_email` also require the recipient to
+be on the verified allow-list. Dry-run additionally skips client construction
+entirely, so `send_sms` and `send_email` succeed in dry run even without
+`boto3` installed.
+
+To check whether the account can really deliver an SMS:
+
+```bash
+aws pinpoint-sms-voice-v2 describe-account-attributes --region ap-southeast-1
+# SubscriptionRequiredException -> send_sms will return error_code 'not_subscribed'
+```
+
+and for SES (a verified-identity list and sandbox status):
+
+```bash
+aws ses get-identity-verification-attributes \
+    --identities martinchenonly1@gmail.com --region ap-southeast-1
+aws ses get-account-sending-enabled --region ap-southeast-1
+```
 
 ## 🧪 Test Scenarios
 

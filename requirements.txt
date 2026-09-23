@@ -17,6 +17,11 @@ python-dateutil==2.8.2
 # twilio==8.11.0
 # python-whatsapp==0.0.1
 
+# AWS messaging backends for the send_sms / send_email tools (AWS End User
+# Messaging SMS + Amazon SES). Imported lazily: without it those two tools
+# report error_code "config_missing" and everything else keeps working.
+boto3==1.35.36
+
 # Development and Testing
 pytest==7.4.3
 pytest-cov==4.1.0

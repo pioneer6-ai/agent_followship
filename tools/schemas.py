@@ -161,6 +161,73 @@ _SEND_EMAIL_SCHEMA: Dict[str, Any] = {
     },
 }
 
+_AWS_SEND_SMS_SCHEMA: Dict[str, Any] = {
+    "name": "send_sms",
+    "description": (
+        "Send one SMS via AWS End User Messaging SMS (pinpoint-sms-voice-v2). "
+        "Use this when SMS is the right channel; it is a separate path from "
+        "send_sms_message. The AWS account is still in its sandbox, so the "
+        "recipient must be one of the verified destination numbers -- any "
+        "other number is refused before transmission."
+        + _FAILURE_PROTOCOL
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "phone_number": {
+                "type": "string",
+                "description": "E.164格式，如+6583536885",
+            },
+            "message": {
+                "type": "string",
+                "description": "SMS text to deliver.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "agent判断需要发送的理由，用于审计",
+            },
+        },
+        "required": ["phone_number", "message", "reason"],
+    },
+}
+
+_AWS_SEND_EMAIL_SCHEMA: Dict[str, Any] = {
+    "name": "send_email",
+    "description": (
+        "Send one email via Amazon SES. Use this when email is the right "
+        "channel; it is a separate path from send_email_message. The AWS "
+        "account is still in the SES sandbox, so the recipient must be one of "
+        "the verified addresses -- any other address is refused before "
+        "transmission."
+        + _FAILURE_PROTOCOL
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "to_email": {
+                "type": "string",
+                "description": "Recipient email address (must be SES-verified).",
+            },
+            "subject": {
+                "type": "string",
+                "description": "Email subject line.",
+            },
+            "body": {
+                "type": "string",
+                "description": "Plain-text email body.",
+            },
+            "reason": {
+                "type": "string",
+                "description": (
+                    "Why the agent decided this send is necessary; recorded "
+                    "for the audit trail."
+                ),
+            },
+        },
+        "required": ["to_email", "subject", "body", "reason"],
+    },
+}
+
 _CANDIDATE_CHANNELS_SCHEMA: Dict[str, Any] = {
     "name": "get_candidate_send_channels",
     "description": (
@@ -261,6 +328,8 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
         _SEND_WHATSAPP_SCHEMA,
         _SEND_SMS_SCHEMA,
         _SEND_EMAIL_SCHEMA,
+        _AWS_SEND_SMS_SCHEMA,
+        _AWS_SEND_EMAIL_SCHEMA,
         _CANDIDATE_CHANNELS_SCHEMA,
         _LIST_TEMPLATES_SCHEMA,
         _ESCALATE_SCHEMA,

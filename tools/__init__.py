@@ -30,6 +30,7 @@ Without an explicit ``MESSAGING_DRY_RUN=0`` every channel reports
 and a populated ``.env`` can never message a real patient.
 """
 
+from tools.aws_providers import AwsPinpointSmsProvider, AwsSesEmailProvider
 from tools.config import DEFAULT_TEMPLATES, MessagingConfig, TemplateSpec
 from tools.errors import SendErrorCode
 from tools.providers import (
@@ -47,6 +48,8 @@ from tools.transport import FakeTransport, HttpResponse, HttpTransport, UrllibTr
 __all__ = [
     "CHANNEL_ORDER",
     "DEFAULT_TEMPLATES",
+    "AwsPinpointSmsProvider",
+    "AwsSesEmailProvider",
     "FakeTransport",
     "HttpResponse",
     "HttpTransport",

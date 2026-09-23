@@ -107,6 +107,53 @@ tools = get_tool_schemas()  # pass to the Claude API as tools=[...]
 The tools never raise: provider failures come back as a structured result, so
 the model can retry on another channel, email the patient, or escalate to staff.
 
+### Real AWS delivery: `send_sms` and `send_email`
+
+Two additional tools transmit over the clinic's AWS account -- SMS via AWS End
+User Messaging (`pinpoint-sms-voice-v2`) and email via Amazon SES. Both take a
+`reason` that the agent must supply; it is printed as `[Agent决策] ...` and kept
+in the audit trail.
+
+```python
+registry.call("send_sms", {
+    "phone_number": "+6583536885",   # must be a verified destination
+    "message": "Time for your 6-month check-up.",
+    "reason": "patient is 7 months past their last visit",
+})
+
+registry.call("send_email", {
+    "to_email": "martinchenonly1@gmail.com",   # must be SES-verified
+    "subject": "Time for your check-up",
+    "body": "Our records show it has been a while since your last visit.",
+    "reason": "no reply to the SMS reminder",
+})
+```
+
+Setup:
+
+```bash
+.venv/bin/pip install boto3            # required by the two AWS tools only
+export AWS_REGION=ap-southeast-1
+export AWS_SES_SOURCE=martinchenonly1@gmail.com
+export AWS_SMS_ALLOWED_NUMBERS=+6583536885
+export AWS_EMAIL_ALLOWED_ADDRESSES=martinchenonly1@gmail.com
+```
+
+Credentials come from the standard boto3 chain, with one caveat: a CLI
+`login_session` (`aws login`) is invisible to botocore, so export it first --
+otherwise the tools report `config_missing` with `NoCredentialsError`.
+
+```bash
+eval "$(aws configure export-credentials --export-env)"
+```
+
+While the account is sandboxed the tools **refuse** any recipient outside those
+allow-lists (`error_code: 'recipient_not_verified'`, `provider_code:
+'allowlist'`) before calling AWS -- the model sees a normal failure and picks
+another channel. SMS additionally needs the account onboarded to AWS End User
+Messaging; until then a real attempt returns `error_code: 'not_subscribed'`,
+which is non-retryable and points the agent at `escalate_to_staff`.
+
 To send for real:
 
 ```bash

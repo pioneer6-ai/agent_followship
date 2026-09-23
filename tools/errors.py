@@ -20,7 +20,7 @@ Provider-specific codes are always preserved verbatim in
 
 from __future__ import annotations
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class SendErrorCode(str, Enum):
@@ -47,6 +47,9 @@ class SendErrorCode(str, Enum):
         PROVIDER_UNAVAILABLE: Provider-side outage or 5xx.
         NETWORK_ERROR: Connection to the provider failed locally.
         INVALID_REQUEST: We built a request the provider rejected as malformed.
+        NOT_SUBSCRIBED: The AWS account is not onboarded to the service in the
+            configured region (``SubscriptionRequiredException``). The code is
+            fine, the account is not: no amount of retrying fixes it.
         UNKNOWN: Anything not otherwise classified.
     """
 
@@ -62,6 +65,7 @@ class SendErrorCode(str, Enum):
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     NETWORK_ERROR = "network_error"
     INVALID_REQUEST = "invalid_request"
+    NOT_SUBSCRIBED = "not_subscribed"
     UNKNOWN = "unknown"
 
     def __str__(self) -> str:  # pragma: no cover - cosmetic
@@ -93,6 +97,7 @@ _FALLBACK_CHANNELS: Dict[SendErrorCode, List[str]] = {
     SendErrorCode.PROVIDER_UNAVAILABLE: [],
     SendErrorCode.NETWORK_ERROR: [],
     SendErrorCode.INVALID_REQUEST: [],
+    SendErrorCode.NOT_SUBSCRIBED: [],
     SendErrorCode.UNKNOWN: [],
 }
 
@@ -142,6 +147,12 @@ _HINTS: Dict[SendErrorCode, str] = {
     ),
     SendErrorCode.INVALID_REQUEST: (
         "The request was rejected as malformed. Correct the arguments and retry."
+    ),
+    SendErrorCode.NOT_SUBSCRIBED: (
+        "The AWS account is not subscribed to this messaging service in the "
+        "configured region, so nothing can be delivered on this channel. "
+        "Credentials are fine; an operator must onboard the account. The agent "
+        "cannot fix this: use another delivery channel or escalate to staff."
     ),
     SendErrorCode.UNKNOWN: (
         "Unclassified failure. Inspect provider_code and error_message; consider "
@@ -251,4 +262,79 @@ def from_http_status(status_code: int) -> SendErrorCode:
         return SendErrorCode.PROVIDER_UNAVAILABLE
     if 400 <= status_code < 500:
         return SendErrorCode.INVALID_REQUEST
+    return SendErrorCode.UNKNOWN
+
+
+#: boto3/botocore error codes shared by AWS End User Messaging SMS and SES.
+#: Keyed by ``ClientError.response["Error"]["Code"]`` (a string), which is why
+#: this table is separate from the numeric Meta/Twilio ones.
+#: See https://docs.aws.amazon.com/sms-voice/latest/userguide/notifications.html
+#: and https://docs.aws.amazon.com/ses/latest/dg/transactional-email.html
+AWS_ERROR_CODES: Dict[str, SendErrorCode] = {
+    # Account/region not onboarded for the service.
+    "SubscriptionRequiredException": SendErrorCode.NOT_SUBSCRIBED,
+    # SES sandbox: "Email address is not verified. The following identities
+    # failed the check in region ...". The channel is fine, the recipient is
+    # not allowed on it yet.
+    "MessageRejected": SendErrorCode.RECIPIENT_NOT_VERIFIED,
+    # Throttling / quota.
+    "ThrottlingException": SendErrorCode.RATE_LIMITED,
+    "Throttling": SendErrorCode.RATE_LIMITED,
+    "TooManyRequestsException": SendErrorCode.RATE_LIMITED,
+    "LimitExceededException": SendErrorCode.RATE_LIMITED,
+    # Credentials / permissions.
+    "AccessDeniedException": SendErrorCode.AUTH_FAILED,
+    "AccessDenied": SendErrorCode.AUTH_FAILED,
+    "UnrecognizedClientException": SendErrorCode.AUTH_FAILED,
+    "InvalidClientTokenId": SendErrorCode.AUTH_FAILED,
+    "ExpiredTokenException": SendErrorCode.AUTH_FAILED,
+    "SignatureDoesNotMatch": SendErrorCode.AUTH_FAILED,
+    "AccountSuspendedException": SendErrorCode.AUTH_FAILED,
+    # Request shape.
+    "ValidationException": SendErrorCode.INVALID_REQUEST,
+    "InvalidParameterValue": SendErrorCode.INVALID_REQUEST,
+    "ParamValidationError": SendErrorCode.INVALID_REQUEST,
+    "BadRequestException": SendErrorCode.INVALID_REQUEST,
+    # Provider-side outage.
+    "ServiceUnavailable": SendErrorCode.PROVIDER_UNAVAILABLE,
+    "InternalServiceError": SendErrorCode.PROVIDER_UNAVAILABLE,
+    "InternalServiceErrorException": SendErrorCode.PROVIDER_UNAVAILABLE,
+    "InternalFailure": SendErrorCode.PROVIDER_UNAVAILABLE,
+    # Local connectivity (botocore raises these instead of ClientError).
+    "EndpointConnectionError": SendErrorCode.NETWORK_ERROR,
+    "ConnectTimeoutError": SendErrorCode.NETWORK_ERROR,
+    "ReadTimeoutError": SendErrorCode.NETWORK_ERROR,
+    # Local setup problems (botocore exception names, not provider codes).
+    "NoCredentialsError": SendErrorCode.CONFIG_MISSING,
+    "PartialCredentialsError": SendErrorCode.CONFIG_MISSING,
+    "InvalidRegionError": SendErrorCode.CONFIG_MISSING,
+    "UnknownServiceError": SendErrorCode.CONFIG_MISSING,
+}
+
+
+def from_boto_error(code: Optional[str]) -> SendErrorCode:
+    """
+    Classify an AWS SDK error code into the normalized vocabulary.
+
+    Args:
+        code: ``ClientError.response["Error"]["Code"]``, or a botocore
+            exception class name. Case is ignored; unknown values map to
+            :attr:`SendErrorCode.UNKNOWN` so nothing is ever silently dropped.
+
+    Returns:
+        Normalized error code.
+    """
+    if not code:
+        return SendErrorCode.UNKNOWN
+    raw = str(code).strip()
+    if raw in AWS_ERROR_CODES:
+        return AWS_ERROR_CODES[raw]
+    lowered = raw.lower()
+    for known, mapped in AWS_ERROR_CODES.items():
+        if known.lower() == lowered:
+            return mapped
+    if "throttl" in lowered or "toomanyrequests" in lowered:
+        return SendErrorCode.RATE_LIMITED
+    if "timeout" in lowered:
+        return SendErrorCode.NETWORK_ERROR
     return SendErrorCode.UNKNOWN

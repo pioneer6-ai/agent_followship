@@ -25,10 +25,16 @@ Tool                         Purpose
 ``send_whatsapp_message``    WhatsApp via Meta Cloud API or Twilio
 ``send_sms_message``         SMS via Twilio
 ``send_email_message``       Email via SMTP
+``send_sms``                 SMS via AWS End User Messaging (allow-listed)
+``send_email``               Email via Amazon SES (allow-listed)
 ``get_candidate_send_channels``  Ranked, consent-aware channel options
 ``list_message_templates``   The approved template catalogue
 ``escalate_to_staff``        Hand the case to a human
 ===========================  ===============================================
+
+The AWS tools are separated from the Twilio/SMTP ones on purpose: they carry a
+``reason`` (the agent's justification, printed and audited) and they refuse to
+transmit to anything outside the verified-recipient allow-list.
 """
 
 from __future__ import annotations
@@ -39,6 +45,7 @@ import inspect
 import json
 import re
 
+from tools.aws_providers import AwsPinpointSmsProvider, AwsSesEmailProvider
 from tools.config import MessagingConfig, TemplateSpec
 from tools.errors import SendErrorCode, suggested_fallbacks
 from tools.providers import (
@@ -57,10 +64,15 @@ TOOL_NAMES: Sequence[str] = (
     "send_whatsapp_message",
     "send_sms_message",
     "send_email_message",
+    "send_sms",
+    "send_email",
     "get_candidate_send_channels",
     "list_message_templates",
     "escalate_to_staff",
 )
+
+#: Default audit reason when the model omits the ``reason`` argument.
+_UNSPECIFIED_REASON = "(unspecified)"
 
 _WHATSAPP_PREFIX = "whatsapp:"
 _PHONE_JUNK = re.compile(r"[\s\-().]")
@@ -157,6 +169,40 @@ def _clip(text: Optional[str], limit: int = _MAX_BODY_CHARS) -> str:
     """Bound message length so a runaway model cannot send megabytes."""
     value = str(text or "")
     return value if len(value) <= limit else value[: limit - 1] + "\u2026"
+
+
+def _has_text(value: Any) -> bool:
+    """True when a value is a non-blank string (``None`` counts as blank)."""
+    return bool(str(value).strip()) if value is not None else False
+
+
+def _normalize_reason(reason: Any) -> str:
+    """
+    Render the agent's justification for the audit trail.
+
+    A missing reason is recorded as ``(unspecified)`` rather than rejecting the
+    send: refusing to contact a patient because the model omitted a free-text
+    justification would be the wrong trade-off.
+    """
+    return str(reason).strip() if reason is not None else _UNSPECIFIED_REASON
+
+
+def _finish(result: ToolResult, reason: Any) -> ToolResult:
+    """
+    Log the agent's decision and echo the reason back to the model.
+
+    Called for every attempt -- success, refusal or provider failure -- so the
+    stdout log and the tool payload always agree on *why* something was sent.
+    """
+    if reason is None:
+        return result
+    text = _normalize_reason(reason)
+    print(f"[Agent\u51b3\u7b56] {text}")
+    if isinstance(result.data, dict):
+        result.data = {"reason": text, **result.data}
+    else:
+        result.data = {"reason": text}
+    return result
 
 
 @dataclass
@@ -263,6 +309,8 @@ class MessagingToolkit:
         config: Messaging configuration (providers, templates, dry-run policy).
         providers: Channel name -> provider. Defaults to the standard set.
         escalation_log: Sink for ``escalate_to_staff``.
+        aws_clients: Optional ``{"sms": client, "email": client}`` boto3 clients
+            for the AWS tools. Injected by tests so nothing touches AWS.
     """
 
     def __init__(
@@ -273,6 +321,7 @@ class MessagingToolkit:
         transport: Optional[HttpTransport] = None,
         smtp_connection_factory: Optional[Callable[[], Any]] = None,
         escalation_log: Optional[EscalationLog] = None,
+        aws_clients: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.config = config or MessagingConfig.from_env()
         self.providers: Dict[str, MessageProvider] = providers or build_default_providers(
@@ -280,6 +329,15 @@ class MessagingToolkit:
             transport=transport,
             smtp_connection_factory=smtp_connection_factory,
         )
+        aws_clients = dict(aws_clients or {})
+        self.aws_providers: Dict[str, MessageProvider] = {
+            "sms": AwsPinpointSmsProvider(
+                self.config, client=aws_clients.get("sms")
+            ),
+            "email": AwsSesEmailProvider(
+                self.config, client=aws_clients.get("email")
+            ),
+        }
         self.escalation_log = escalation_log or EscalationLog()
         self.history: List[Dict[str, Any]] = []
 
@@ -383,6 +441,153 @@ class MessagingToolkit:
             body=body,
             subject=subject,
         )
+
+    # ------------------------------------------------------------------
+    # Tools: AWS End User Messaging SMS / Amazon SES
+    # ------------------------------------------------------------------
+
+    def send_sms(
+        self,
+        phone_number: Any = None,
+        message: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> ToolResult:
+        """
+        Send an SMS through AWS End User Messaging (``pinpoint-sms-voice-v2``).
+
+        Args:
+            phone_number: E.164 number, e.g. ``+6583536885``. Must be on the
+                verified-recipient allow-list while the account is sandboxed.
+            message: Message text. Blank is a hard ``invalid_request``.
+            reason: The agent's justification for sending. Logged to stdout and
+                stored in the audit trail.
+
+        Returns:
+            A :class:`ToolResult`: ``success=True`` with a ``message_id``, or a
+            normalized failure. Never raises -- ``ClientError`` from AWS becomes
+            ``error_code`` (``not_subscribed``, ``rate_limited``, ...) plus
+            ``retryable`` and ``suggested_fallback_channels`` so the model can
+            choose another channel instead of the process dying.
+        """
+        return self._aws_send(
+            tool="send_sms",
+            channel="sms",
+            recipient_raw=phone_number,
+            normalize=normalize_phone,
+            body=message,
+            reason=reason,
+            allowlist_label="verified SMS recipient allow-list",
+        )
+
+    def send_email(
+        self,
+        to_email: Any = None,
+        subject: Optional[str] = None,
+        body: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> ToolResult:
+        """
+        Send an email through Amazon SES (``ses.send_email``).
+
+        Args:
+            to_email: Destination address. Must be on the verified-recipient
+                allow-list while the account is in the SES sandbox.
+            subject: Subject line. Blank is a hard ``invalid_request``.
+            body: Plain-text body. Blank is a hard ``invalid_request``.
+            reason: The agent's justification for sending. Logged to stdout and
+                stored in the audit trail.
+
+        Returns:
+            A :class:`ToolResult`: ``success=True`` with a ``message_id``, or a
+            normalized failure (``recipient_not_verified`` when SES sandbox
+            rejects an unverified address). Never raises.
+        """
+        return self._aws_send(
+            tool="send_email",
+            channel="email",
+            recipient_raw=to_email,
+            normalize=normalize_email,
+            body=body,
+            subject=subject,
+            reason=reason,
+            allowlist_label="verified email recipient allow-list",
+        )
+
+    def _aws_send(
+        self,
+        *,
+        tool: str,
+        channel: str,
+        recipient_raw: Any,
+        normalize: Callable[..., Optional[str]],
+        body: Optional[str],
+        subject: Optional[str] = None,
+        reason: Optional[str] = None,
+        allowlist_label: str = "",
+    ) -> ToolResult:
+        """
+        Guarded entry point for the AWS-backed channels.
+
+        Applies the checks the AWS tools need on top of the shared pipeline:
+        a non-blank payload, and the verified-recipient allow-list -- which
+        fails **closed**, so an empty list denies everything rather than
+        opening the floodgates.
+        """
+        try:
+            reason = _normalize_reason(reason)
+            country = (
+                [self.config.default_country_code]
+                if channel in {"whatsapp", "sms"}
+                else []
+            )
+            if not normalize(recipient_raw, *country):
+                return self._fail(
+                    tool,
+                    channel,
+                    recipient_raw,
+                    SendErrorCode.INVALID_RECIPIENT,
+                    (
+                        f"'{_clip(str(recipient_raw or ''), 64)}' is not a usable "
+                        f"{'email address' if channel == 'email' else 'phone number'}"
+                    ),
+                    provider_code="validation",
+                    reason=reason,
+                )
+
+            if not _has_text(body) or (channel == "email" and not _has_text(subject)):
+                missing = "body and subject" if channel == "email" else "message"
+                return self._fail(
+                    tool,
+                    channel,
+                    recipient_raw,
+                    SendErrorCode.INVALID_REQUEST,
+                    f"'{missing}' must be a non-empty string",
+                    provider_code="validation",
+                    data={"missing_text_field": missing},
+                    reason=reason,
+                )
+
+            allowed = (
+                self.config.is_sms_recipient_allowed
+                if channel == "sms"
+                else self.config.is_email_recipient_allowed
+            )
+            return self._send(
+                tool=tool,
+                channel=channel,
+                recipient_raw=recipient_raw,
+                normalize=normalize,
+                body=body,
+                subject=subject,
+                reason=reason,
+                provider=self.aws_providers.get(channel),
+                recipient_allowed=allowed,
+                allowlist_label=allowlist_label,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            return _finish(
+                self._unexpected(tool, channel, exc, reason=reason), reason
+            )
 
     # ------------------------------------------------------------------
     # Tools: decision support
@@ -601,14 +806,18 @@ class MessagingToolkit:
         channel: str,
         recipient_raw: Any,
         normalize: Callable[..., Optional[str]],
-        template: Optional[str],
-        params: Any,
-        body: Optional[str],
+        template: Optional[str] = None,
+        params: Any = None,
+        body: Optional[str] = None,
         subject: Optional[str] = None,
         language: Optional[str] = None,
+        reason: Optional[str] = None,
+        provider: Optional[MessageProvider] = None,
+        recipient_allowed: Optional[Callable[[str], bool]] = None,
+        allowlist_label: str = "",
     ) -> ToolResult:
         """
-        Shared implementation of the three send tools.
+        Shared implementation of the send tools.
 
         Deliberately total: every branch returns a :class:`ToolResult` and the
         outer guard converts even programming errors into observable failures.
@@ -623,6 +832,14 @@ class MessagingToolkit:
             body: Pre-rendered body, when free-form.
             subject: Email subject.
             language: Template language override.
+            reason: The agent's justification for sending, logged and audited.
+            provider: Explicit provider to use instead of the channel default.
+                The AWS tools pass theirs here because they share the logical
+                ``sms``/``email`` channels with the Twilio/SMTP providers.
+            recipient_allowed: Optional allow-list predicate the recipient must
+                satisfy before any send is attempted. Fails closed.
+            allowlist_label: Human-readable name of that allow-list, used in
+                the refusal message.
 
         Returns:
             A :class:`ToolResult` describing exactly one attempt.
@@ -647,6 +864,27 @@ class MessagingToolkit:
                         f"{'email address' if channel == 'email' else 'phone number'}"
                     ),
                     provider_code="validation",
+                    reason=reason,
+                )
+
+            if recipient_allowed is not None and not recipient_allowed(recipient):
+                label = allowlist_label or recipient_allowed.__name__
+                return self._fail(
+                    tool,
+                    channel,
+                    recipient,
+                    SendErrorCode.RECIPIENT_NOT_VERIFIED,
+                    (
+                        f"'{recipient}' is not on the {label} for this channel. "
+                        f"While the account is in its provider sandbox only "
+                        f"verified destinations may receive messages."
+                    ),
+                    provider_code="allowlist",
+                    data={
+                        "allowlist": label,
+                        "allowlist_reason": "sandbox-verified-recipients-only",
+                    },
+                    reason=reason,
                 )
 
             spec: Optional[TemplateSpec] = None
@@ -664,6 +902,7 @@ class MessagingToolkit:
                         f"Unknown template '{template}'. Available: {available}",
                         provider_code="validation",
                         data={"available_templates": self.config.template_names()},
+                        reason=reason,
                     )
                 if spec.param_count and len(param_list) != spec.param_count:
                     return self._fail(
@@ -679,6 +918,7 @@ class MessagingToolkit:
                             "expected_param_count": spec.param_count,
                             "received_param_count": len(param_list),
                         },
+                        reason=reason,
                     )
 
             rendered: Optional[str] = None
@@ -700,10 +940,11 @@ class MessagingToolkit:
                     SendErrorCode.INVALID_REQUEST,
                     "Provide either a template (with params) or a body",
                     provider_code="validation",
+                    reason=reason,
                 )
 
-            provider = self.providers.get(channel)
-            if provider is None:
+            active_provider = provider or self.providers.get(channel)
+            if active_provider is None:
                 return self._fail(
                     tool,
                     channel,
@@ -711,6 +952,7 @@ class MessagingToolkit:
                     SendErrorCode.PROVIDER_UNAVAILABLE,
                     f"No provider is enabled for channel '{channel}'",
                     provider_code="no_provider",
+                    reason=reason,
                 )
 
             request = SendRequest(
@@ -730,7 +972,7 @@ class MessagingToolkit:
                 ),
             )
 
-            outcome = provider.send(request)
+            outcome = active_provider.send(request)
             result = ToolResult(
                 tool=tool,
                 success=outcome.success,
@@ -748,10 +990,17 @@ class MessagingToolkit:
                 provider_code=outcome.provider_code,
                 latency_ms=outcome.latency_ms,
             )
-            self._record(result, request=request, provider_code=outcome.provider_code)
-            return result
+            self._record(
+                result,
+                request=request,
+                provider_code=outcome.provider_code,
+                reason=reason,
+            )
+            return _finish(result, reason)
         except Exception as exc:  # pragma: no cover - defensive
-            return self._unexpected(tool, channel, exc)
+            return _finish(
+                self._unexpected(tool, channel, exc, reason=reason), reason
+            )
 
     def _fail(
         self,
@@ -763,6 +1012,7 @@ class MessagingToolkit:
         provider_code: Optional[str] = None,
         data: Optional[Dict[str, Any]] = None,
         kind: str = "send",
+        reason: Optional[str] = None,
     ) -> ToolResult:
         """Build (and log) a validation-style failure result."""
         result = ToolResult(
@@ -776,11 +1026,16 @@ class MessagingToolkit:
             provider_code=provider_code,
             data=data,
         )
-        self._record(result)
-        return result
+        self._record(result, reason=reason)
+        return _finish(result, reason)
 
     def _unexpected(
-        self, tool: str, channel: str, exc: BaseException, kind: str = "send"
+        self,
+        tool: str,
+        channel: str,
+        exc: BaseException,
+        kind: str = "send",
+        reason: Optional[str] = None,
     ) -> ToolResult:
         """
         Last-resort guard: a bug becomes an observable failure, not a traceback.
@@ -795,7 +1050,7 @@ class MessagingToolkit:
             error_message=f"Internal tool error: {type(exc).__name__}: {exc}",
             provider_code=type(exc).__name__,
         )
-        self._record(result)
+        self._record(result, reason=reason)
         return result
 
     def _record(
@@ -804,6 +1059,7 @@ class MessagingToolkit:
         *,
         request: Optional[SendRequest] = None,
         provider_code: Optional[str] = None,
+        reason: Optional[str] = None,
     ) -> None:
         """
         Append an audit entry for the attempt.
@@ -812,6 +1068,7 @@ class MessagingToolkit:
             result: The result being recorded.
             request: The request that produced it, when applicable.
             provider_code: Raw provider code, when applicable.
+            reason: The agent's stated justification, when supplied.
         """
         entry: Dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -826,6 +1083,8 @@ class MessagingToolkit:
             "error_message": result.error_message,
             "latency_ms": result.latency_ms,
         }
+        if reason is not None:
+            entry["reason"] = _clip(_normalize_reason(reason), 500)
         if request is not None:
             entry["template"] = request.template
             entry["body_preview"] = _clip(request.body, 160)
@@ -863,6 +1122,8 @@ class ToolRegistry:
         self.register("send_whatsapp_message", toolkit.send_whatsapp_message)
         self.register("send_sms_message", toolkit.send_sms_message)
         self.register("send_email_message", toolkit.send_email_message)
+        self.register("send_sms", toolkit.send_sms)
+        self.register("send_email", toolkit.send_email)
         self.register(
             "get_candidate_send_channels", toolkit.get_candidate_send_channels
         )
@@ -985,6 +1246,7 @@ def build_tool_registry(
     smtp_connection_factory: Optional[Callable[[], Any]] = None,
     escalation_log: Optional[EscalationLog] = None,
     escalation_file: Optional[str] = None,
+    aws_clients: Optional[Mapping[str, Any]] = None,
 ) -> ToolRegistry:
     """
     Build the standard registry of messaging tools.
@@ -996,6 +1258,8 @@ def build_tool_registry(
         smtp_connection_factory: Injectable SMTP connection builder.
         escalation_log: Explicit escalation sink.
         escalation_file: JSONL path for escalations when no sink is given.
+        aws_clients: Optional ``{"sms": client, "email": client}`` boto3 clients
+            for the AWS tools; when omitted they are created lazily on first use.
 
     Returns:
         A ready-to-use :class:`ToolRegistry`.
@@ -1005,6 +1269,7 @@ def build_tool_registry(
         providers=providers,
         transport=transport,
         smtp_connection_factory=smtp_connection_factory,
+        aws_clients=aws_clients,
         escalation_log=escalation_log
         or (EscalationLog(escalation_file) if escalation_file else None),
     )

@@ -51,7 +51,12 @@ SYSTEM_PROMPT = (
     "Call list_message_templates if you are unsure of a name or parameter "
     "count.\n"
     "6. Treat 'simulated: true' results as dry-run: report them as simulated, "
-    "never as delivered."
+    "never as delivered.\n"
+    "7. Two AWS paths are available: send_sms and send_email. They are the "
+    "clinic's production transports but can currently only reach verified test "
+    "destinations, so a recipient_not_verified refusal means the channel is "
+    "unavailable for this patient right now -- not that the patient refused. "
+    "Pass a short 'reason' explaining your decision; it is logged for audit."
 )
 
 

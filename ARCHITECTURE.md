@@ -202,11 +202,12 @@ demo.py
 
 tools/                        # LLM tool layer (self-contained, no imports from agent/)
     ├── result.py             # ToolResult - never-raising return type
-    ├── errors.py             # Error taxonomy + channel fallback table
-    ├── config.py             # Env-driven MessagingConfig + templates
+    ├── errors.py             # Error taxonomy + channel fallback table + AWS code map
+    ├── config.py             # Env-driven MessagingConfig + templates + allow-lists
     ├── transport.py          # HTTP/SMTP transports + fake test doubles
     ├── providers.py          # MessageProvider: Meta, Twilio, SMTP
-    ├── messaging.py          # 6 tools + ToolRegistry dispatcher
+    ├── aws_providers.py      # MessageProvider: AWS End User Messaging SMS, SES
+    ├── messaging.py          # 8 tools + ToolRegistry dispatcher
     ├── schemas.py            # Anthropic tool schemas
     ├── llm_agent.py          # Claude tool-use loop + AgentRun
     └── demo_tool_use.py      # Offline 3-scenario demonstration
@@ -228,9 +229,9 @@ ToolRegistry.call(name, args)        # tools/messaging.py
     ▼
 MessagingToolkit._send()             # one attempt, one provider
     ▼
-MessageProvider.send()               # Meta/Twilio/SMTP
+MessageProvider.send()               # Meta/Twilio/SMTP/AWS
     ▼
-Transport (urllib / smtplib)
+Transport (urllib / smtplib / boto3)
 ```
 
 ### Why the tools never raise
@@ -255,8 +256,40 @@ Layer by layer:
 |-------|----------------|---------------|
 | `transport.py` | Perform I/O; map `HTTPError`/`URLError`/`SMTPException` to a response | Yes, converts to a response object |
 | `providers.py` | Build the provider request, classify the response | Yes, returns `ProviderOutcome` |
+| `aws_providers.py` | Build the AWS request, classify `ClientError` | Yes, returns `ProviderOutcome` |
 | `messaging.py` | Validate input, perform one attempt, build `ToolResult` | Yes, outer `except Exception` → `_unexpected` |
 | `llm_agent.py` | Dispatch `tool_use` blocks, feed results back | Yes, unknown tool → error payload |
+
+### AWS-backed channels
+
+`send_sms` and `send_email` share the logical `sms` / `email` channels with the
+Twilio and SMTP providers, but route to dedicated providers in
+`aws_providers.py` selected by the toolkit, so the two paths never interfere.
+They add three things the other send tools do not have:
+
+1. **A `reason` argument** - the agent's justification, printed as
+   `[Agent决策] ...`, stored in the audit entry and echoed in
+   `ToolResult.data["reason"]`. Recorded on success, on refusal and on provider
+   failure alike, because the audit question is "why did we try this".
+2. **A verified-recipient allow-list** - `AWS_SMS_ALLOWED_NUMBERS` /
+   `AWS_EMAIL_ALLOWED_ADDRESSES`, enforced *before* any client is built and
+   failing **closed**. A sandboxed account can only deliver to verified
+   destinations, so refusing early gives the model the same
+   `recipient_not_verified` shape it already knows how to fall back from
+   (`provider_code: "allowlist"` distinguishes it from a provider rejection).
+3. **Structured `ClientError` handling** - `errors.from_boto_error()` maps the
+   raw AWS code string through `AWS_ERROR_CODES` into the shared taxonomy.
+   `SubscriptionRequiredException` becomes `not_subscribed` (non-retryable, no
+   fallbacks - an operator must onboard the account), SES's `MessageRejected`
+   becomes `recipient_not_verified`, throttling becomes `rate_limited`, and
+   anything unrecognized becomes `unknown` with the raw code preserved in
+   `provider_code`. Exceptions that are *not* AWS-shaped are treated as bugs and
+   routed through `_guard()` so they are never mislabelled.
+
+`boto3` is imported lazily and is an optional dependency: without it both tools
+return `config_missing`, and the offline demo, the tests and every other tool
+keep working. Dry-run mode short-circuits before the client is resolved, so no
+session is created and no credentials are read.
 
 ### Dry-run semantics
 

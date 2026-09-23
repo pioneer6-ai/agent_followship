@@ -16,7 +16,7 @@ Everything is environment-driven so that credentials never live in source
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 import json
 import os
 import re
@@ -157,6 +157,35 @@ def _clean_country_code(raw: Optional[str]) -> Optional[str]:
     return f"+{digits}" if digits else None
 
 
+def _env_list(
+    source: Mapping[str, str], name: str, default: List[str]
+) -> List[str]:
+    """
+    Parse a comma-separated environment variable into a list.
+
+    The parsed value **replaces** ``default`` rather than extending it, so a
+    deployment can narrow or widen the allow-list without code changes. A blank
+    or unset variable keeps the default.
+
+    Args:
+        source: Environment mapping.
+        name: Variable name.
+        default: Value used when the variable is unset/blank.
+
+    Returns:
+        The resolved list.
+    """
+    raw = source.get(name)
+    if raw is None or str(raw).strip() == "":
+        return list(default)
+    return [item.strip() for item in str(raw).split(",") if item.strip()]
+
+
+def _digits(value: Any) -> str:
+    """Return only the digits of a phone number, for comparison."""
+    return re.sub(r"\D", "", str(value or ""))
+
+
 @dataclass
 class MessagingConfig:
     """
@@ -171,6 +200,9 @@ class MessagingConfig:
         meta_*: Meta WhatsApp Cloud API settings.
         twilio_*: Twilio settings (shared by WhatsApp and SMS).
         smtp_* / email_from: Outbound email settings.
+        aws_* / aws_sms_allowlist / aws_email_allowlist: AWS region, SES sender
+            and the verified-recipient allow-lists enforced by ``send_sms`` /
+            ``send_email``.
     """
 
     # Channel selection
@@ -206,6 +238,20 @@ class MessagingConfig:
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
     email_from: Optional[str] = None
+
+    # AWS End User Messaging SMS (pinpoint-sms-voice-v2) + SES.
+    # While the account is in the SMS sandbox / SES sandbox, only verified
+    # destinations may receive anything, so the allow-lists below are enforced
+    # by the ``send_sms`` / ``send_email`` tools before any API call is made.
+    aws_region: str = "ap-southeast-1"
+    aws_ses_source: str = "martinchenonly1@gmail.com"
+    aws_sms_origination_identity: Optional[str] = None
+    aws_sms_allowlist: List[str] = field(
+        default_factory=lambda: ["+6583536885"]
+    )
+    aws_email_allowlist: List[str] = field(
+        default_factory=lambda: ["martinchenonly1@gmail.com"]
+    )
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "MessagingConfig":
@@ -260,6 +306,24 @@ class MessagingConfig:
             smtp_use_tls=bool(_env_bool(source, "SMTP_USE_TLS", True)),
             smtp_use_ssl=bool(_env_bool(source, "SMTP_USE_SSL", False)),
             email_from=source.get("EMAIL_FROM") or source.get("SMTP_USERNAME"),
+            aws_region=str(
+                source.get("AWS_REGION") or source.get("AWS_DEFAULT_REGION") or ""
+            ).strip()
+            or "ap-southeast-1",
+            aws_ses_source=str(
+                source.get("AWS_SES_SOURCE") or ""
+            ).strip()
+            or "martinchenonly1@gmail.com",
+            aws_sms_origination_identity=(
+                str(source.get("AWS_SMS_ORIGINATION_IDENTITY") or "").strip()
+                or None
+            ),
+            aws_sms_allowlist=_env_list(
+                source, "AWS_SMS_ALLOWED_NUMBERS", ["+6583536885"]
+            ),
+            aws_email_allowlist=_env_list(
+                source, "AWS_EMAIL_ALLOWED_ADDRESSES", ["martinchenonly1@gmail.com"]
+            ),
         )
 
     def template(self, name: Optional[str]) -> Optional[TemplateSpec]:
@@ -302,3 +366,45 @@ class MessagingConfig:
         treating this as "nothing to worry about".
         """
         return not self.live_requested
+
+    def is_sms_recipient_allowed(self, recipient: Any) -> bool:
+        """
+        Whether a phone number is a permitted AWS SMS destination.
+
+        Comparison is digit-only, so ``+6583536885``, ``65 8353 6885`` and
+        ``6583536885`` all match the same allow-list entry.
+
+        Fails **closed**: an empty allow-list permits nothing.
+
+        Args:
+            recipient: Candidate phone number.
+
+        Returns:
+            True when the number is on the allow-list.
+        """
+        allowed = {
+            _digits(number) for number in self.aws_sms_allowlist if _digits(number)
+        }
+        candidate = _digits(recipient)
+        return bool(candidate) and candidate in allowed
+
+    def is_email_recipient_allowed(self, recipient: Any) -> bool:
+        """
+        Whether an address is a permitted SES destination.
+
+        Comparison is case- and whitespace-insensitive. Fails **closed**: an
+        empty allow-list permits nothing.
+
+        Args:
+            recipient: Candidate email address.
+
+        Returns:
+            True when the address is on the allow-list.
+        """
+        allowed = {
+            str(address).strip().lower()
+            for address in self.aws_email_allowlist
+            if str(address or "").strip()
+        }
+        candidate = str(recipient or "").strip().lower()
+        return bool(candidate) and candidate in allowed
