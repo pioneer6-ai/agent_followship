@@ -362,6 +362,32 @@ aws cloudwatch get-metric-statistics \
   --dimensions Name=ses:configuration-set,Value=patient-followup
 ```
 
+The SMTP channel needs no configuration set: the mailbox itself is the proof.
+One IMAP login shows whether the message landed in `INBOX`, in `Spam`, or
+nowhere -- the same credentials, a different port:
+
+```bash
+.venv/bin/python - <<'PY'
+import imaplib
+from tools.config import MessagingConfig
+from tools.tls import default_ssl_context
+
+cfg = MessagingConfig.from_env()
+imap = imaplib.IMAP4_SSL("imap.gmail.com", 993,
+                         ssl_context=default_ssl_context())
+imap.login(cfg.smtp_username, cfg.smtp_password)
+for folder in ("INBOX", '"[Gmail]/Spam"'):
+    imap.select(folder, readonly=True)
+    _, found = imap.search(None, 'SUBJECT "BrightSmile"')
+    print(folder, len(found[0].split()))
+imap.logout()
+PY
+```
+
+Note that Gmail's non-INBOX folder names are modified UTF-7 (`[Gmail]/&V4NXPpCuTvY-`
+is the spam folder in a Chinese-locale account), so search by subject rather than
+assuming an English folder name.
+
 ### Deliverability
 
 `AWS_SES_SOURCE` defaults to the recipient's own `gmail.com` address. That works
@@ -398,7 +424,15 @@ export MESSAGING_DRY_RUN=0
 ```
 
 Gmail rejects account passwords over SMTP: enable 2-Step Verification, then
-create an App Password at <https://myaccount.google.com/apppasswords>.
+create an App Password at <https://myaccount.google.com/apppasswords>. That
+password is **exactly 16 characters**. Gmail displays it grouped
+(`abcd efgh ijkl mnop`), and either form works here: `MessagingConfig` drops the
+display spaces, but only when the value is unambiguously an app password --
+exactly 16 alphanumerics once whitespace is removed -- so a conventional
+password containing spaces is passed through untouched. A grouped password with
+the wrong number of characters is left alone and logs a plain
+`auth_failed`; sending the spaced form to Gmail makes it drop the connection
+mid-handshake instead, which reads as a provider outage.
 
 Two caveats apply to the SES path while the account is in the sandbox: every
 recipient must be a verified identity, and you can only send from verified

@@ -155,6 +155,11 @@ export SMTP_PASSWORD=<16-character app password>
 export EMAIL_FROM=martinchenonly1@gmail.com
 ```
 
+The password is exactly 16 characters. Copy it either grouped (`abcd efgh ijkl
+mnop`) or bare -- the display spaces are stripped for you, but only when what
+remains is 16 alphanumerics, so a normal password with spaces is never rewritten.
+If the value has the wrong length it is left alone and you get `auth_failed`.
+
 and call `send_email_message` instead of `send_email`. If you *do* control a
 domain's DNS, `scripts/ses_domain_setup.py clinic.example.com --create` prints
 the records that let the SES path be verified too.
