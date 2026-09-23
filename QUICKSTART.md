@@ -12,10 +12,10 @@ cd agent_followship
 pip install -r requirements.txt
 ```
 
-**Setting this up for a real clinic?** Start with `hospital_setup.py` instead —
-it is the one file a hospital edits to point the agent at its own LLM and its
-own already-maintained domain mailbox. Everything below runs offline with sample
-data and needs no credentials.
+**Setting this up for a real clinic?** Start with `hospital_setup.py` (repository
+root) — it is the one interface file a hospital edits to point the agent at its
+own LLM and its own already-maintained domain mailbox. Everything below runs
+offline with sample data and needs no credentials.
 
 ```bash
 .venv/bin/python hospital_setup.py --show    # what is configured (secret-free)
@@ -24,9 +24,11 @@ data and needs no credentials.
 
 Edit the `LLM` / `EMAIL` / `AGENT` blocks at the top of the file, or set the
 corresponding environment variables (see `.env.example`). The three settings most
-clinics change are `LLM.provider` (any vendor, or `disabled` to use the rule
-engine), `EMAIL.address` (their own mailbox) and `EMAIL.display_name`. Full
-details: README → **Hospital Setup**.
+clinics change are `LLM.provider` (one of `anthropic` / `openai` / `azure` /
+`disabled` — self-hosted models such as Ollama use `openai` plus a `base_url`),
+`EMAIL.address` (their own mailbox) and `EMAIL.display_name`. The file is also
+importable, so a hospital's own portal can drive it. Full details, including the
+function reference: README → **Hospital Setup**.
 
 ## Option 1: Interactive Demo (Recommended for First Time)
 

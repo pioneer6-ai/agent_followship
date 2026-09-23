@@ -91,7 +91,11 @@ class LlmProviderConfig:
     Everything needed to reach one model endpoint.
 
     Attributes:
-        kind: ``anthropic``, ``openai``, ``azure`` or ``disabled``.
+        kind: The *normalised* vendor: ``anthropic``, ``openai``, ``azure`` or
+            ``disabled``. Never an alias -- ``from_env`` maps every vendor
+            spelling (``ollama``, ``vllm``, ``deepseek``, ...) onto one of these
+            via :func:`_normalize_kind`, so callers only ever branch on four
+            values. An unrecognised name degrades to ``anthropic``.
         model: Model id (or Azure deployment name).
         api_key: Credential. Never logged.
         base_url: Endpoint root. Vendor defaults apply when blank.
@@ -127,7 +131,10 @@ class LlmProviderConfig:
 
         ===========================  =========================================
         ``AGENT_LLM_PROVIDER``       ``anthropic`` | ``openai`` | ``azure`` |
-                                     ``disabled``
+                                     ``disabled``. Vendor aliases (``ollama``,
+                                     ``vllm``, ``litellm``, ``deepseek``, ...)
+                                     mean ``openai`` + a base URL; anything
+                                     unrecognised means ``anthropic``.
         ``AGENT_LLM_MODEL``          model id, e.g. ``claude-sonnet-4-5``,
                                      ``gpt-4o-mini``, ``llama3.1:8b``
         ``AGENT_LLM_API_KEY``        credential (falls back to

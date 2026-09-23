@@ -234,26 +234,35 @@ assist). The import path needs no credentials and no network.
 
 ## The hospital interface (`hospital_setup.py`)
 
-The clinic-facing surface is deliberately a single file with three dataclass
-blocks, so a hospital can change LLM vendor or mailbox without reading any agent
-code.
+Located at the **repository root**. The clinic-facing surface is deliberately a
+single file with three dataclass blocks, so a hospital can change LLM vendor or
+mailbox without reading any agent code. It is usable two ways: the CLI below, or
+`import hospital_setup` from a hospital's own onboarding service.
 
 ```
-hospital_setup.py
+hospital_setup.py                    (repository root)
   LlmSettings    ──environment()──→ AGENT_LLM_PROVIDER / _MODEL / _API_KEY / _BASE_URL
   EmailSettings  ──environment()──→ SMTP_HOST / _PORT / _USERNAME / _PASSWORD,
                                     EMAIL_FROM / EMAIL_FROM_NAME
   AgentSettings  ──environment()──→ AGENT_ESCALATION_EMAIL, policy knobs,
                                     AGENT_LIVE_SENDS, MESSAGING_DRY_RUN
         │
-        ├── apply()     writes the variables into the real environment
-        ├── summary()   secret-free description (API keys/passwords redacted)
-        └── validate()  pure inspection; reports the mistakes that actually happen
+        ├── apply(*, override=True) -> int   writes into os.environ; returns count
+        ├── summary()    -> Dict[str, Any]   secret-free (keys/passwords redacted)
+        ├── validate()   -> List[str]        pure inspection; [] means good
+        └── environment()-> Dict[str, str]   renders without touching anything
 
-        check_llm()   live one-shot call through tools.llm_providers
-        check_email() live SMTP authentication through tools.tls SSL context
-   --send-test <addr> one real email, bypassing MESSAGING_DRY_RUN for that call only
+        check_llm()        -> (bool, str)  live one-shot call via tools.llm_providers
+        check_email()      -> (bool, str)  live SMTP auth via tools.tls SSL context
+        send_test_email(r) -> (bool, str)  one real email, bypassing MESSAGING_DRY_RUN
+                                           for that call only
 ```
+
+`LlmSettings.provider` is `anthropic` | `openai` | `azure` | `disabled`; the many
+vendor aliases (`ollama`, `vllm`, `litellm`, `deepseek`, `qwen`, ...) all
+normalise to `openai`, and an unrecognised name falls back to `anthropic`.
+`LlmProviderConfig.kind` is the *normalised* result, which is why the file says
+`provider` while the config object says `kind` -- `kind` is never an alias.
 
 Consumption is what makes the file meaningful, and it is asserted by tests:
 
@@ -601,7 +610,7 @@ and no network: `FakeTransport` / `FakeSmtpConnection` record requests,
 so the agent's failure handling is exercised without touching a provider.
 
 ```bash
-.venv/bin/python -m pytest tests/ -q          # 520 tests
+.venv/bin/python -m pytest tests/ -q          # 525 tests
 .venv/bin/python -m tools.demo_tool_use       # 3 scenarios, 11 checks
 ```
 

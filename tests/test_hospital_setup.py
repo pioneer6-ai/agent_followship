@@ -11,6 +11,7 @@ The settings are module-level globals (that is the whole point of the file), so
 each test substitutes them and lets monkeypatch restore them.
 """
 
+import inspect
 import os
 
 import pytest
@@ -667,3 +668,79 @@ class TestSendTestEmail:
             hs.send_test_email("not-an-address")
         except Exception as exc:  # pragma: no cover - the failure being guarded
             raise AssertionError(f"send_test_email raised {exc!r}")
+
+
+class TestTheInterfaceIsImportable:
+    """The README documents this file as a Python interface; keep both in step."""
+
+    def test_it_exposes_exactly_the_documented_functions(self):
+        for name in (
+            "environment",
+            "apply",
+            "validate",
+            "summary",
+            "check_llm",
+            "check_email",
+            "send_test_email",
+        ):
+            assert callable(getattr(hs, name)), name
+
+    def test_the_documented_signatures_are_stable(self):
+        # README's function table quotes these; a change there is a doc change.
+        assert str(inspect.signature(hs.apply)) == "(*, override: 'bool' = True) -> 'int'"
+        assert str(inspect.signature(hs.send_test_email)).startswith(
+            "(recipient: 'str')"
+        )
+
+    def test_environment_renders_without_touching_os_environ(self, monkeypatch):
+        monkeypatch.setenv("AGENT_LLM_PROVIDER", "sentinel-should-not-be-read")
+        before = dict(os.environ)
+        rendered = hs.environment()
+        assert dict(os.environ) == before
+        assert isinstance(rendered, dict)
+        assert rendered["AGENT_LLM_PROVIDER"]  # rendered from the settings
+
+    def test_the_documented_alias_collapse_holds(self):
+        # README claims these all mean "openai", and that a typo means anthropic.
+        from tools.llm_providers import LlmProviderConfig
+
+        for alias in ("openai-compatible", "ollama", "vllm", "deepseek", "qwen"):
+            config = LlmProviderConfig.from_env({"AGENT_LLM_PROVIDER": alias})
+            assert config.kind == "openai", alias
+
+        # Matching is case-insensitive, as the README states.
+        assert LlmProviderConfig.from_env(
+            {"AGENT_LLM_PROVIDER": "OpenAI"}
+        ).kind == "openai"
+        assert LlmProviderConfig.from_env(
+            {"AGENT_LLM_PROVIDER": "AZURE"}
+        ).kind == "azure"
+
+        assert LlmProviderConfig.from_env(
+            {"AGENT_LLM_PROVIDER": "typo-nonsense"}
+        ).kind == "anthropic"
+
+    def test_applying_a_config_reaches_the_agents_own_config_objects(self, monkeypatch):
+        # The README's headline claim: apply() is what the agent actually reads.
+        from tools.config import MessagingConfig
+        from tools.llm_providers import LlmProviderConfig
+
+        monkeypatch.setattr(hs, "LLM", LlmSettings(
+            provider="openai", base_url="http://10.0.0.7:8000/v1",
+            model="Qwen/Qwen2.5-72B-Instruct",
+        ))
+        monkeypatch.setattr(hs, "EMAIL", EmailSettings(
+            enabled=True, address="reminders@hospital.example",
+            display_name="General Hospital", preset="microsoft365",
+        ))
+
+        assert hs.apply() > 0
+
+        llm = LlmProviderConfig.from_env()
+        assert (llm.kind, llm.base_url, llm.model) == (
+            "openai", "http://10.0.0.7:8000/v1", "Qwen/Qwen2.5-72B-Instruct",
+        )
+        mail = MessagingConfig.from_env()
+        assert mail.email_from == "reminders@hospital.example"
+        assert mail.email_from_name == "General Hospital"
+        assert mail.smtp_host == "smtp.office365.com"

@@ -136,8 +136,13 @@ Then open your browser to: `http://localhost:5000`
 
 Bring your own LLM and bring your own mailbox.
 
-Everything a clinic configures lives in **one file**: `hospital_setup.py`. No
-other file needs editing to point the agent at a different LLM or a different
+Everything a clinic configures lives in **one file**:
+
+```
+agent_followship/hospital_setup.py        <-- the interface file (repository root)
+```
+
+No other file needs editing to point the agent at a different LLM or a different
 email account.
 
 ```bash
@@ -150,7 +155,7 @@ Edit the three dataclass blocks at the top of the file:
 
 ```python
 LLM = LlmSettings(
-    provider   = "anthropic",     # or openai / azure / openai-compatible / ollama
+    provider   = "anthropic",     # anthropic / openai / azure / disabled
     model      = "claude-sonnet-4-5",
     api_key    = "",             # prefer exporting (see below) over pasting
     base_url   = "",             # self-hosted gateways
@@ -171,32 +176,106 @@ AGENT = AgentSettings(
 )
 ```
 
+### Using it as a Python interface
+
+`hospital_setup.py` is importable, so a hospital's own onboarding portal or
+internal service can drive it instead of shelling out to the CLI. Every function
+is pure-ish and returns data rather than exiting:
+
+| Function | Returns | Notes |
+|---|---|---|
+| `environment()` | `Dict[str, str]` | The variables your settings render to. Touches nothing. |
+| `apply(*, override=True)` | `int` | Writes them into `os.environ`; returns how many were written. |
+| `validate()` | `List[str]` | Human-readable problems; empty means good. Does **not** load `.env`. |
+| `summary()` | `Dict[str, Any]` | Secret-free description (keys/passwords redacted). |
+| `check_llm()` | `Tuple[bool, str]` | Live one-shot model call. |
+| `check_email()` | `Tuple[bool, str]` | Live SMTP authentication. |
+| `send_test_email(recipient)` | `Tuple[bool, str]` | One real email. |
+
+```python
+import hospital_setup as hs
+
+hs.LLM.provider = "openai"                      # or "deepseek", "ollama", ...
+hs.LLM.base_url = "http://10.0.0.7:8000/v1"
+hs.LLM.model    = "Qwen/Qwen2.5-72B-Instruct"
+hs.EMAIL.enabled, hs.EMAIL.address = True, "reminders@yourclinic.com"
+hs.EMAIL.display_name, hs.EMAIL.preset = "Your Clinic", "microsoft365"
+
+# Secrets come from the environment (OPENAI_API_KEY, SMTP_PASSWORD), so they are
+# never written into a file that might be committed.
+problems = hs.validate()
+if problems:                       # e.g. a missing credential or password
+    raise SystemExit(problems)
+print(hs.apply(), "variables applied")           # -> the agent now uses these
+```
+
+Run with the secrets exported, this prints `problems: none` / `17 variables
+applied`. Leave them out and `validate()` names exactly what is missing instead of
+failing later at send time — which is the point of checking before applying.
+
+That call is verified to actually reach the agent: the same run shows the agent's
+own config objects picking the values up:
+
+```
+apply() wrote   : 17 vars
+kind            : openai            (from provider=openai-compatible)
+base_url        : http://10.0.0.7:8000/v1
+model           : Qwen/Qwen2.5-72B-Instruct
+mail from       : reminders@hospital.example
+from name       : General Hospital
+smtp            : smtp.office365.com 587
+```
+
+Note the two names differ deliberately: the file calls it `provider`, while the
+agent's internal `LlmProviderConfig` calls the normalized result `kind` (which is
+always one of the four values above, never an alias).
+
 ### 1. The hospital's own LLM
 
-`AGENT_LLM_PROVIDER` accepts `anthropic`, `openai`, `azure`,
-`openai-compatible`, `ollama`, or `disabled`. `openai-compatible` covers
-self-hosted and in-house gateways (vLLM, LiteLLM, TGI, an internal proxy) —
-give it `base_url` up to but **not** including `/chat/completions`.
+`AGENT_LLM_PROVIDER` has **four behaviours**:
 
-Two deliberate design choices make this safe for a clinic to own:
+| Value | Behaviour |
+|---|---|
+| `anthropic` | Claude (also the default) |
+| `openai` | Anything speaking `/chat/completions` |
+| `azure` | Azure OpenAI (set `api_version`) |
+| `disabled` | No model — run the rule engine only |
 
-- **A typo cannot take the agent offline.** An unrecognised provider name
-  degrades to `anthropic` rather than raising.
-- **The LLM is never a single point of failure.** It may only choose among the
-  actions the rule engine already permits, and *any* problem — bad key,
-  timeout, out-of-bounds answer, `disabled` — silently falls back to the rules.
-  Patient follow-up never stops because a model endpoint is down.
-
-Vendor keys are never crossed: `ANTHROPIC_API_KEY` is never sent to an OpenAI
-endpoint, and vice versa.
+Many names are **aliases of `openai`**, not separate vendors:
+`openai-compatible`, `compatible`, `custom`, `ollama`, `vllm`, `tgi`,
+`litellm`, `deepseek`, `qwen`, `groq`, `together`, `moonshot`, `zhipu`. So
+"self-hosted Ollama" is simply `openai` + a `base_url`. Give `base_url` up to
+but **not** including `/chat/completions`. Matching is case-insensitive.
 
 ```bash
 # a self-hosted model inside the hospital network
-export AGENT_LLM_PROVIDER=openai-compatible
+export AGENT_LLM_PROVIDER=openai
 export AGENT_LLM_BASE_URL=http://10.0.0.7:8000/v1
 export AGENT_LLM_API_KEY=not-needed-but-some-gateways-want-one
 export AGENT_LLM_MODEL=Qwen/Qwen2.5-72B-Instruct
 ```
+
+Verified alias collapse (a real run, not a claim):
+
+```
+provider='ollama'         -> kind=openai
+provider='deepseek'       -> kind=openai
+provider='vllm'           -> kind=openai
+provider='OpenAI'         -> kind=openai
+provider='typo-nonsense'  -> kind=anthropic   # a typo degrades, never breaks
+```
+
+Two deliberate design choices make this safe for a clinic to own:
+
+- **A typo cannot take the agent offline.** An unrecognised name degrades to
+  `anthropic` rather than raising.
+- **The LLM is never a single point of failure.** It may only choose among the
+  actions the rule engine already permits, and *any* problem — bad key, timeout,
+  out-of-bounds answer, `disabled` — silently falls back to the rules. Patient
+  follow-up never stops because a model endpoint is down.
+
+Vendor keys are never crossed: `ANTHROPIC_API_KEY` is never sent to an OpenAI
+endpoint, and vice versa.
 
 ### 2. The hospital's own domain mailbox
 
