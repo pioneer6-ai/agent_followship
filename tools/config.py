@@ -308,6 +308,10 @@ class MessagingConfig:
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
     email_from: Optional[str] = None
+    #: Friendly name shown beside the From address, e.g. "BrightSmile Dental".
+    #: A clinic sending from its own domain wants patients to see the clinic
+    #: name, not a bare address.
+    email_from_name: Optional[str] = None
 
     # AWS End User Messaging SMS (pinpoint-sms-voice-v2) + SES.
     # While the account is in the SMS sandbox / SES sandbox, only verified
@@ -381,6 +385,9 @@ class MessagingConfig:
             smtp_use_tls=bool(_env_bool(source, "SMTP_USE_TLS", True)),
             smtp_use_ssl=bool(_env_bool(source, "SMTP_USE_SSL", False)),
             email_from=source.get("EMAIL_FROM") or source.get("SMTP_USERNAME"),
+            email_from_name=(
+                str(source.get("EMAIL_FROM_NAME") or "").strip() or None
+            ),
             aws_region=str(
                 source.get("AWS_REGION") or source.get("AWS_DEFAULT_REGION") or ""
             ).strip()

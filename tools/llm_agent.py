@@ -274,9 +274,22 @@ class ToolUseAgent:
         self.tools = get_tool_schemas(tool_names)
 
     def _client(self) -> Any:
-        """Return the client, creating a real one on first use if needed."""
+        """
+        Return the client, creating one on first use if needed.
+
+        Uses whichever vendor the clinic configured via ``AGENT_LLM_PROVIDER``,
+        so the same choice governs the decision engine and this tool-use loop.
+        """
         if self.client is None:
-            self.client = create_anthropic_client()
+            from tools.llm_providers import create_llm_client
+
+            client = create_llm_client()
+            if client is None:
+                raise MissingAnthropicError(
+                    "No LLM is configured (AGENT_LLM_PROVIDER=disabled). Set a "
+                    "provider in hospital_setup.py or pass a client explicitly."
+                )
+            self.client = client
         return self.client
 
     def run(

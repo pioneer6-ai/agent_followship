@@ -12,6 +12,22 @@ cd agent_followship
 pip install -r requirements.txt
 ```
 
+**Setting this up for a real clinic?** Start with `hospital_setup.py` instead —
+it is the one file a hospital edits to point the agent at its own LLM and its
+own already-maintained domain mailbox. Everything below runs offline with sample
+data and needs no credentials.
+
+```bash
+.venv/bin/python hospital_setup.py --show    # what is configured (secret-free)
+.venv/bin/python hospital_setup.py --check   # prove the LLM + mailbox actually work
+```
+
+Edit the `LLM` / `EMAIL` / `AGENT` blocks at the top of the file, or set the
+corresponding environment variables (see `.env.example`). The three settings most
+clinics change are `LLM.provider` (any vendor, or `disabled` to use the rule
+engine), `EMAIL.address` (their own mailbox) and `EMAIL.display_name`. Full
+details: README → **Hospital Setup**.
+
 ## Option 1: Interactive Demo (Recommended for First Time)
 
 ```bash
@@ -36,9 +52,37 @@ Then open your browser to: **http://localhost:8080**
 Features:
 - 📊 Real-time statistics
 - 📋 Active case monitoring
+- 📤 **Upload a patient list** → the rows are imported and a daily cycle runs
+  immediately, so they appear as cases on the same page
 - ⚠️ Escalation tracking
 - 🔄 Manual cycle triggering
 - 📝 Audit log viewer
+
+### Importing a patient list (upload → dashboard)
+
+The dashboard's upload control does a **two-step** round trip, and both steps
+matter:
+
+1. `POST /api/upload-patient-list` parses the file and returns a preview — it
+   stores nothing.
+2. `POST /api/import-patients` stores the rows *and* runs a daily agent cycle in
+   the same request, which is what makes them visible as cases.
+
+```bash
+# what the dashboard sends under the hood
+curl -X POST http://localhost:8080/api/upload-patient-list -F "file=@patients.csv"
+curl -X POST http://localhost:8080/api/import-patients   -F "file=@patients.csv"
+```
+
+CSV, TSV, JSON, TXT, XLSX and XLS are accepted. Rows without a usable name or
+contact detail are reported in `skipped_count`; rows whose `patient_id` already
+exists are listed in `duplicate_patients` and are **not** overwritten.
+
+A row becomes an active case only when it is *overdue*:
+`days_overdue = (today - last_visit_date) - recall_interval_days`. A list whose
+`last_visit` dates are recent (or missing — those default to today, giving
+`days_overdue = 0`) imports successfully and correctly shows **no** active
+cases. Use realistically old `last_visit` dates when testing.
 
 ## Option 3: Direct Python Usage
 

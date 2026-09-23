@@ -385,32 +385,41 @@ class LlmDecisionEngine(DecisionEngine):
         model: Optional[str] = None,
     ) -> "LlmDecisionEngine":
         """
-        Build an engine backed by a real Anthropic client when one is available.
+        Build an engine backed by whichever model the clinic configured.
 
-        Returns an engine with no client -- i.e. pure rule behaviour -- when the
-        ``anthropic`` package or the API key is missing, so an offline demo, CI
-        run or test suite is unaffected.
+        The vendor is chosen by ``AGENT_LLM_PROVIDER`` (see
+        :mod:`tools.llm_providers`); the Anthropic path is the default. Returns an
+        engine with no client -- i.e. pure rule behaviour -- when no usable model
+        is configured, so an offline demo, CI run or test suite is unaffected.
 
         Args:
             policy: Clinic policy.
-            api_key: Explicit key; otherwise ``ANTHROPIC_API_KEY``.
-            model: Model id to request; otherwise ``AGENT_DECISION_MODEL``, and
-                finally :data:`DEFAULT_LLM_MODEL`.
+            api_key: Explicit credential, overriding the environment.
+            model: Model id to request. Defaults to ``AGENT_LLM_MODEL``, then
+                ``AGENT_DECISION_MODEL``, then the vendor default.
 
         Returns:
             An engine ready to use, possibly in rules-only mode.
         """
-        from tools.llm_agent import create_anthropic_client
+        from tools.llm_providers import LlmProviderConfig, create_llm_client
 
-        model = model or os.environ.get("AGENT_DECISION_MODEL") or DEFAULT_LLM_MODEL
+        config = LlmProviderConfig.from_env()
+        if model:
+            config.model = model
+        elif not config.model:
+            config.model = os.environ.get("AGENT_DECISION_MODEL") or DEFAULT_LLM_MODEL
+        if api_key:
+            config.api_key = api_key
 
         try:
-            client = create_anthropic_client(api_key)
+            client = create_llm_client(config)
         except Exception:
-            # Missing package, missing key, bad key: rules-only is the right answer
-            # because an offline run must never depend on the model being reachable.
-            return cls(policy, client=None, model=model)
-        return cls(policy, client=client, model=model)
+            # Missing package, missing key, bad key, malformed endpoint: rules-only
+            # is the right answer because an offline run must never depend on the
+            # model being reachable. The clinic can switch vendor with
+            # AGENT_LLM_PROVIDER without touching this code.
+            return cls(policy, client=None, model=config.model)
+        return cls(policy, client=client, model=config.model)
 
     @property
     def client(self) -> Optional[Any]:

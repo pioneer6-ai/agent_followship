@@ -19,8 +19,15 @@ Dental clinics face challenges maintaining consistent follow-up schedules as the
   failed and routes around it (channel fallback, then escalation) instead of
   crashing or claiming success
 - **🎯 Clinical Prioritization**: Urgency-based on treatment type and patient history
-- **📤 Smart Data Import**: Upload patient lists in any format - AI parses automatically
-- **🔍 LLM-Powered Parsing**: Handles inconsistent data formats intelligently
+- **📤 Smart Data Import**: Upload a patient list (CSV/TSV/JSON/TXT/XLSX/XLS) and
+  the agent imports it and immediately runs a cycle, so the rows show up as cases
+  on the main dashboard in the same request
+- **🏥 Bring Your Own LLM**: Any provider (Claude, OpenAI, Azure, self-hosted
+  OpenAI-compatible, Ollama) via one config file — with fallback to the rule
+  engine whenever the model is unavailable, so the agent never stops
+- **📧 Bring Your Own Mailbox**: Send from the clinic's own already-maintained
+  domain address, so mail is signed by the clinic's provider and keeps the
+  clinic's reputation
 
 ## 🏗️ Architecture
 
@@ -124,6 +131,103 @@ python app.py
 ```
 
 Then open your browser to: `http://localhost:5000`
+
+## 🏥 Hospital Setup
+
+Bring your own LLM and bring your own mailbox.
+
+Everything a clinic configures lives in **one file**: `hospital_setup.py`. No
+other file needs editing to point the agent at a different LLM or a different
+email account.
+
+```bash
+.venv/bin/python hospital_setup.py --show        # what is configured (secret-free)
+.venv/bin/python hospital_setup.py --check       # prove the LLM + mailbox work
+.venv/bin/python hospital_setup.py --send-test you@yourclinic.com   # one real email
+```
+
+Edit the three dataclass blocks at the top of the file:
+
+```python
+LLM = LlmSettings(
+    provider   = "anthropic",     # or openai / azure / openai-compatible / ollama
+    model      = "claude-sonnet-4-5",
+    api_key    = "",             # prefer exporting (see below) over pasting
+    base_url   = "",             # self-hosted gateways
+)
+
+EMAIL = EmailSettings(
+    enabled       = True,
+    address       = "reminders@yourclinic.com",   # the clinic's own maintained mailbox
+    display_name  = "Your Clinic",                # what patients see in their inbox
+    preset        = "microsoft365",               # fills host/port/encryption for you
+    smtp_password = "",                           # prefer exporting SMTP_PASSWORD
+)
+
+AGENT = AgentSettings(
+    escalation_email = "staff@yourclinic.com",
+    enable_live_sending     = False,   # both of these must be True AND
+    live_sends_acknowledged = False,   # MESSAGING_DRY_RUN=0 before anything is sent
+)
+```
+
+### 1. The hospital's own LLM
+
+`AGENT_LLM_PROVIDER` accepts `anthropic`, `openai`, `azure`,
+`openai-compatible`, `ollama`, or `disabled`. `openai-compatible` covers
+self-hosted and in-house gateways (vLLM, LiteLLM, TGI, an internal proxy) —
+give it `base_url` up to but **not** including `/chat/completions`.
+
+Two deliberate design choices make this safe for a clinic to own:
+
+- **A typo cannot take the agent offline.** An unrecognised provider name
+  degrades to `anthropic` rather than raising.
+- **The LLM is never a single point of failure.** It may only choose among the
+  actions the rule engine already permits, and *any* problem — bad key,
+  timeout, out-of-bounds answer, `disabled` — silently falls back to the rules.
+  Patient follow-up never stops because a model endpoint is down.
+
+Vendor keys are never crossed: `ANTHROPIC_API_KEY` is never sent to an OpenAI
+endpoint, and vice versa.
+
+```bash
+# a self-hosted model inside the hospital network
+export AGENT_LLM_PROVIDER=openai-compatible
+export AGENT_LLM_BASE_URL=http://10.0.0.7:8000/v1
+export AGENT_LLM_API_KEY=not-needed-but-some-gateways-want-one
+export AGENT_LLM_MODEL=Qwen/Qwen2.5-72B-Instruct
+```
+
+### 2. The hospital's own domain mailbox
+
+Set `EMAIL.address` to the mailbox the clinic already maintains and the agent
+sends patient mail **as that address**, through that clinic's own provider.
+Because mail is signed by the clinic's provider, it keeps the clinic's sending
+reputation and lands in the inbox — unlike relayed mail from a third-party
+identity, which is routinely foldered as spam.
+
+| Preset | Port | Encryption |
+|---|---|---|
+| `microsoft365`, `google`, `zoho`, `workmail`, `ses`, `fastmail` | 587 | STARTTLS |
+| `exmail`, `aliyun` | 465 | implicit TLS |
+
+`SMTP_HOST` (plus `SMTP_PORT` / `SMTP_USE_TLS` / `SMTP_USE_SSL`) always overrides
+a preset, so any provider works. Gmail and Google Workspace require a
+16-character **App Password** — see [Deliverability](#deliverability).
+
+Prefer exporting the secret over pasting it into the file:
+
+```bash
+export SMTP_PASSWORD='the app password'   # hospital_setup.py reads .env and the environment
+```
+
+> ⚠️ **The SMTP channel has no recipient allow-list.** The two AWS tools
+> (`send_sms`, `send_email`) refuse any address that is not on
+> `AWS_SMS_ALLOWED_NUMBERS` / `AWS_EMAIL_ALLOWED_ADDRESSES`, because sandboxed
+> AWS accounts can only reach verified destinations. The clinic's own mailbox
+> has no such restriction — it can reach anyone it can relay to, and the
+> reputation and volume limits become the clinic's. Keep `MESSAGING_DRY_RUN=1`
+> until the clinic is ready for that responsibility.
 
 ## 📖 Usage Guide
 
@@ -735,6 +839,38 @@ Get detailed information about a specific case.
 ### POST /api/run-cycle
 Trigger a daily agent cycle manually.
 
+### POST /api/upload-patient-list
+Parse an uploaded patient list without storing it — returns the rows the agent
+understood, so the dashboard can show a preview before committing.
+
+**Request:** multipart form with a `file` field (CSV, TSV, JSON, TXT, XLSX, XLS).
+
+```bash
+curl -X POST http://localhost:5000/api/upload-patient-list \
+     -F "file=@patients.csv"
+```
+
+### POST /api/import-patients
+Store the uploaded patients and immediately run a daily agent cycle, so the rows
+appear as cases on the main dashboard in the same request.
+
+**Request:** the same multipart upload, or `{"patients": [...]}` as JSON.
+
+**Response:**
+```json
+{
+  "success": true,
+  "imported_count": 2,
+  "skipped_count": 0,
+  "duplicate_patients": []
+}
+```
+
+`skipped_count` counts rows missing a usable name or contact detail;
+`duplicate_patients` lists rows whose `patient_id` already exists (they are not
+overwritten). The import is what makes an uploaded list visible on the main
+page — parsing alone changes nothing.
+
 ### POST /api/simulate-reply
 Simulate receiving a reply from a patient.
 
@@ -844,6 +980,23 @@ from tools import build_tool_registry, get_tool_schemas
 registry = build_tool_registry()
 tools = get_tool_schemas()  # pass to the Claude API as `tools=[...]`
 ```
+
+To run the agent's DECIDE step on **your own** model instead, use the provider
+adapter — no change to the tools or to `agent/`:
+
+```python
+from tools.llm_providers import LlmProviderConfig, create_llm_client
+
+config = LlmProviderConfig.from_env()   # reads AGENT_LLM_*
+client = create_llm_client(config)      # None => use the rule engine
+```
+
+`create_llm_client` returns `None` for a `disabled` provider, and
+`LlmProviderConfig.from_env` falls back to `anthropic` on an unrecognised name,
+so neither a typo nor a missing key can leave the agent without a decider — it
+degrades to the rules. For the clinic-facing configuration file and live
+verification commands, see
+[Hospital Setup](#-hospital-setup).
 
 ### Adding a Messaging Provider
 

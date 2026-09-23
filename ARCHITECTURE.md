@@ -11,6 +11,7 @@ agent_followship/
 ├── requirements.txt            # Python dependencies
 ├── .gitignore                  # Git ignore patterns
 ├── demo.py                     # Interactive demonstration
+├── hospital_setup.py           # THE hospital entry point: BYO LLM + BYO mailbox
 ├── .env.example                # Environment template (copy to .env)
 │
 ├── core/                       # Domain types, no behaviour
@@ -48,6 +49,7 @@ agent_followship/
 │   ├── messaging.py            # Deterministic tools + ToolRegistry
 │   ├── schemas.py              # Anthropic tool schemas
 │   ├── llm_agent.py            # Claude tool-use loop + AgentRun
+│   ├── llm_providers.py        # BYO LLM: Anthropic/OpenAI/Azure/Ollama adapters
 │   └── demo_tool_use.py        # Offline 3-scenario demonstration
 │
 ├── scripts/
@@ -60,7 +62,10 @@ agent_followship/
     ├── test_providers.py       # Meta/Twilio/SMTP payloads + classification
     ├── test_aws_tools.py       # AWS SES / End User Messaging via fake clients
     ├── test_agent_loop.py      # Tool-use loop, fallback, escalation, audit
-    └── test_agent_delivery.py  # The agent's own failure handling + decisions
+    ├── test_agent_delivery.py  # The agent's own failure handling + decisions
+    ├── test_llm_providers.py   # BYO-LLM translation, live calls, factories
+    ├── test_hospital_setup.py  # The clinic-facing config file and its checks
+    └── test_web_upload.py      # Upload -> import -> dashboard round trip
 
 Generated at runtime: `audit_log.json` (audit trail), `escalations.json`.
 ```
@@ -194,6 +199,88 @@ Patient Reply
     │
     └─→ audit_logger.log_communication(...)
 ```
+
+### 3. Patient-list import (upload → dashboard)
+
+```
+File upload (CSV / TSV / JSON / TXT / XLSX / XLS)
+    │
+    ▼
+POST /api/upload-patient-list            web/app.py
+    └─→ LLMPatientParser.parse_file()    utils/llm_parser.py
+          ├─ format-specific reader, then _standardize_patient_data()
+          ├─ daysoverdue = max(0, (today - last_visit_date) - recall_interval_days)
+          └─→ preview rows (nothing is stored yet)
+    │
+    ▼
+POST /api/import-patients
+    ├─→ data_store.add_patient()  for each row   (skips duplicates by patient_id)
+    └─→ agent.run_daily_cycle()   <-- this is what makes the rows visible
+          └─→ PERCEIVE finds the newly-overdue patients and creates cases
+    │
+    ▼
+GET /api/status, GET /api/cases  ->  dashboard re-renders
+
+Two independent failure modes, worth knowing when a list "does not show up":
+  - the parse step stored nothing by design (preview only), so a client that
+    calls only /api/upload-patient-list will never see cases; and
+  - a row with no `last_visit` gets days_overdue = 0, so it will appear in the
+    store but produce no case until it is genuinely overdue.
+```
+
+Note: `web/app.py` constructs `LLMPatientParser(use_llm=False)`, so import is
+entirely rule-based (`use_llm=True` plus a key is what enables the optional model
+assist). The import path needs no credentials and no network.
+
+## The hospital interface (`hospital_setup.py`)
+
+The clinic-facing surface is deliberately a single file with three dataclass
+blocks, so a hospital can change LLM vendor or mailbox without reading any agent
+code.
+
+```
+hospital_setup.py
+  LlmSettings    ──environment()──→ AGENT_LLM_PROVIDER / _MODEL / _API_KEY / _BASE_URL
+  EmailSettings  ──environment()──→ SMTP_HOST / _PORT / _USERNAME / _PASSWORD,
+                                    EMAIL_FROM / EMAIL_FROM_NAME
+  AgentSettings  ──environment()──→ AGENT_ESCALATION_EMAIL, policy knobs,
+                                    AGENT_LIVE_SENDS, MESSAGING_DRY_RUN
+        │
+        ├── apply()     writes the variables into the real environment
+        ├── summary()   secret-free description (API keys/passwords redacted)
+        └── validate()  pure inspection; reports the mistakes that actually happen
+
+        check_llm()   live one-shot call through tools.llm_providers
+        check_email() live SMTP authentication through tools.tls SSL context
+   --send-test <addr> one real email, bypassing MESSAGING_DRY_RUN for that call only
+```
+
+Consumption is what makes the file meaningful, and it is asserted by tests:
+
+| Emitted variable | Read by |
+|---|---|
+| `AGENT_LLM_PROVIDER` / `_MODEL` / `_API_KEY` / `_BASE_URL` | `tools.llm_providers.LlmProviderConfig.from_env` |
+| `EMAIL_FROM` / `EMAIL_FROM_NAME` | `tools.config.MessagingConfig`, `SmtpEmailProvider._from_header` |
+| `AGENT_MAX_REMINDERS_BEFORE_ESCALATION` / `AGENT_REMINDER_INTERVAL_DAYS` | `core.config.ClinicPolicyConfig.from_env` |
+
+Design rules that matter:
+
+- **`.env` is loaded by the entry points, not by `validate()`.** `main()`,
+  `check_llm()`, `check_email()` and `send_test_email()` all call `load_dotenv()`
+  first, because the guide tells clinics to *export* `SMTP_PASSWORD` rather than
+  paste it into the file. `validate()` stays a pure inspection of whatever is
+  already in the environment; calling it directly from library code therefore
+  requires loading `.env` first.
+- **Blank or garbage policy values fall back to defaults** (`_int()` in
+  `core/config.py`), so a typo in a clinic's settings cannot stop the agent.
+- **`--send-test` deliberately bypasses `MESSAGING_DRY_RUN`** for that one
+  explicit call, without flipping `AGENT.enable_live_sending`. It re-applies the
+  override *after* `apply()`, and refuses to report success if the resolved
+  config is somehow still simulating — a bug that made it print PASS while
+  sending nothing.
+- **Two independent switches** (`MESSAGING_DRY_RUN=0` **and**
+  `AGENT_LIVE_SENDS=1`) still gate the agent's own sending; `--send-test` is an
+  operator action, not the agent acting on its own.
 
 ## Module Dependencies
 
@@ -514,7 +601,7 @@ and no network: `FakeTransport` / `FakeSmtpConnection` record requests,
 so the agent's failure handling is exercised without touching a provider.
 
 ```bash
-.venv/bin/python -m pytest tests/ -q          # 364 tests
+.venv/bin/python -m pytest tests/ -q          # 520 tests
 .venv/bin/python -m tools.demo_tool_use       # 3 scenarios, 11 checks
 ```
 

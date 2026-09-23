@@ -94,7 +94,7 @@ class FollowUpAgentOrchestrator:
         # Store dependencies
         self.data_store = data_store
         self.calendar = calendar
-        self.policy = policy or ClinicPolicyConfig()
+        self.policy = policy or ClinicPolicyConfig.from_env()
 
         # Initialize core business logic components
         self.rule_engine = RecallRuleEngine(self.policy)
@@ -129,7 +129,10 @@ class FollowUpAgentOrchestrator:
     @classmethod
     def with_llm_decisions(
         cls,
-        *args: object,
+        data_store: PatientDataStore,
+        calendar: CalendarIntegration,
+        policy: Optional[ClinicPolicyConfig] = None,
+        *,
         model: Optional[str] = None,
         **kwargs: object,
     ) -> "FollowUpAgentOrchestrator":
@@ -141,24 +144,27 @@ class FollowUpAgentOrchestrator:
         key (or no ``anthropic`` install) it silently degrades to the rule
         engine, which is why this is safe to use as the default in the web app.
 
+        The leading parameters mirror :meth:`__init__` exactly rather than being
+        forwarded through ``*args``. That matters: a caller passing ``policy``
+        positionally must not collide with a ``policy`` keyword added here, which
+        is precisely the failure this signature exists to prevent.
+
         Args:
-            *args: Positional arguments for ``__init__``.
-            *model: Claude model id override.
-            **kwargs: Keyword arguments for ``__init__``.
+            data_store: Patient data access layer.
+            calendar: Calendar/scheduling integration.
+            policy: Clinic policy, or ``None`` for the defaults.
+            model: Model id override; otherwise ``AGENT_DECISION_MODEL``.
+            **kwargs: Remaining ``__init__`` arguments.
 
         Returns:
             A configured orchestrator.
         """
-        policy = kwargs.get("policy")
-        if not isinstance(policy, ClinicPolicyConfig):
-            policy = ClinicPolicyConfig()
-            kwargs["policy"] = policy
-        if model is None:
-            engine = LlmDecisionEngine.from_environment(policy)
-        else:
-            engine = LlmDecisionEngine.from_environment(policy, model=model)
-        kwargs.setdefault("decision_engine", engine)
-        return cls(*args, **kwargs)  # type: ignore[arg-type]
+        resolved_policy = policy or ClinicPolicyConfig.from_env()
+        kwargs.setdefault(
+            "decision_engine",
+            LlmDecisionEngine.from_environment(resolved_policy, model=model),
+        )
+        return cls(data_store, calendar, resolved_policy, **kwargs)  # type: ignore[arg-type]
 
     def run_daily_cycle(self, today: Optional[date] = None) -> list[FollowUpCase]:
         """

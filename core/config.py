@@ -6,6 +6,20 @@ that can be adjusted without modifying the core agent logic.
 """
 
 from dataclasses import dataclass
+from typing import Mapping, Optional
+import os
+
+
+def _int(source: Mapping[str, str], name: str, default: int) -> int:
+    """Parse a positive integer, falling back on blank or garbage."""
+    raw = str(source.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 @dataclass
@@ -31,3 +45,52 @@ class ClinicPolicyConfig:
     high_urgency_threshold_days: int = 30
     critical_urgency_threshold_days: int = 60
     reminder_interval_days: int = 7
+
+    @classmethod
+    def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "ClinicPolicyConfig":
+        """
+        Build the policy from environment variables, keeping the defaults.
+
+        A clinic changes its escalation threshold without editing code, and an
+        unset or malformed variable keeps the documented default rather than
+        failing startup -- a typo in a tuning knob must not take the agent down.
+
+        Variables::
+
+            AGENT_MAX_REMINDERS_BEFORE_ESCALATION  (int, default 3)
+            AGENT_REMINDER_INTERVAL_DAYS           (int, default 7)
+            AGENT_HIGH_URGENCY_THRESHOLD_DAYS      (int, default 30)
+            AGENT_CRITICAL_URGENCY_THRESHOLD_DAYS  (int, default 60)
+
+        Args:
+            env: Mapping to read instead of ``os.environ`` (tests).
+
+        Returns:
+            A populated config.
+        """
+        source: Mapping[str, str] = os.environ if env is None else env
+        defaults = cls()
+        return cls(
+            working_hours=defaults.working_hours,
+            max_reminders_before_escalation=_int(
+                source,
+                "AGENT_MAX_REMINDERS_BEFORE_ESCALATION",
+                defaults.max_reminders_before_escalation,
+            ),
+            opt_out_respected=defaults.opt_out_respected,
+            high_urgency_threshold_days=_int(
+                source,
+                "AGENT_HIGH_URGENCY_THRESHOLD_DAYS",
+                defaults.high_urgency_threshold_days,
+            ),
+            critical_urgency_threshold_days=_int(
+                source,
+                "AGENT_CRITICAL_URGENCY_THRESHOLD_DAYS",
+                defaults.critical_urgency_threshold_days,
+            ),
+            reminder_interval_days=_int(
+                source,
+                "AGENT_REMINDER_INTERVAL_DAYS",
+                defaults.reminder_interval_days,
+            ),
+        )

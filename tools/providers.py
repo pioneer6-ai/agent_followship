@@ -24,6 +24,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Any, Callable, Dict, List, Optional
 import base64
 import json
@@ -515,10 +516,24 @@ class SmtpEmailProvider(MessageProvider):
         """Build the RFC 5322 message."""
         message = EmailMessage()
         message["To"] = request.to
-        message["From"] = self.config.email_from or ""
+        message["From"] = self._from_header()
         message["Subject"] = request.subject or "Message from your dental clinic"
         message.set_content(request.body or "")
         return message
+
+    def _from_header(self) -> str:
+        """
+        Render the ``From`` header.
+
+        A display name is used when configured, so a clinic sending from its own
+        domain shows as the clinic rather than a bare address. ``formataddr``
+        quotes the name correctly, and the address itself is never altered.
+        """
+        address = self.config.email_from or ""
+        name = self.config.email_from_name
+        if not address or not name:
+            return address
+        return formataddr((str(name), address))
 
     def send(self, request: SendRequest) -> ProviderOutcome:
         """Deliver the email, classifying any SMTP failure."""
