@@ -16,6 +16,7 @@ These are cheap static checks over the real files, so they cannot silently rot.
 
 import os
 import re
+import sys
 from typing import Dict, List, Set, Tuple
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -301,3 +302,182 @@ class TestDocumentedTestCount:
             f"ARCHITECTURE.md claims {claimed} tests but {actual} are collected; "
             f"update the count (tolerance ±{self.TOLERANCE})"
         )
+
+
+# Tooling installed for development but never imported by the project's own
+# modules, so it cannot be discovered from the source.
+DEV_TOOLING: Set[str] = {
+    "black",
+    "flake8",
+    "mypy",
+    "pytest",
+    "pytest-cov",
+    "sphinx",
+}
+
+_SOURCE_DIRS = ("tools", "agent", "core", "web", "utils", "scripts")
+_ROOT_MODULES = ("hospital_setup.py", "demo.py")
+
+
+def _project_sources() -> List[str]:
+    files: List[str] = []
+    for directory in _SOURCE_DIRS:
+        for dirpath, _dirs, names in os.walk(os.path.join(PROJECT_ROOT, directory)):
+            files += [os.path.join(dirpath, n) for n in names if n.endswith(".py")]
+    files += [
+        os.path.join(PROJECT_ROOT, name)
+        for name in _ROOT_MODULES
+        if os.path.exists(os.path.join(PROJECT_ROOT, name))
+    ]
+    return files
+
+
+def _third_party_by_scope() -> Tuple[Dict[str, Set[str]], Set[str]]:
+    """
+    Return ``(all_imports, module_scope_imports)``.
+
+    ``module_scope_imports`` holds only imports executed on import of the file --
+    a direct child of the module body. The project deliberately keeps boto3,
+    anthropic, certifi and openpyxl *inside* functions or ``try`` blocks so the
+    offline test suite and demo run without them, and those land in the first
+    mapping but not the second.
+    """
+    import ast
+
+    stdlib = set(sys.stdlib_module_names)
+    local = set(_SOURCE_DIRS)
+    for directory in _SOURCE_DIRS:
+        path = os.path.join(PROJECT_ROOT, directory)
+        if os.path.isdir(path):
+            for name in os.listdir(path):
+                if name.endswith(".py"):
+                    local.add(name[:-3])
+
+    def top_level(module: str) -> str:
+        return module.split(".")[0]
+
+    def keep(module: str, seen: Set[str]) -> None:
+        top = top_level(module)
+        if top and top not in stdlib and top not in local:
+            seen.add(top)
+
+    everything: Set[str] = set()
+    hard: Set[str] = set()
+    for path in _project_sources():
+        with open(path, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read())
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    keep(alias.name, everything)
+            elif isinstance(node, ast.ImportFrom):
+                if not node.level and node.module:
+                    keep(node.module, everything)
+
+        # ``tree.body`` is the module's own body, so this excludes anything
+        # nested in a function, a try/except or a conditional import.
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    keep(alias.name, hard)
+            elif isinstance(node, ast.ImportFrom):
+                if not node.level and node.module:
+                    keep(node.module, hard)
+    return {module: set() for module in everything}, hard
+
+
+def _declared_packages() -> List[str]:
+    return [
+        line.split("==")[0].strip()
+        for line in _read("requirements.txt").splitlines()
+        if "==" in line and not line.strip().startswith("#")
+    ]
+
+
+class TestRequirementsTemplate:
+    """
+    ``requirements.txt`` is documentation a user acts on: ``pip install -r
+    requirements.txt`` is step 2 of the README.
+
+    It silently omitted ``botocore`` even though ``scripts/ses_domain_setup.py``
+    imports ``botocore.exceptions`` by name, leaving that pin to arrive
+    transitively through boto3 -- fragile for a module the code names itself.
+
+    Two rules, because the project has two kinds of dependency:
+
+    * An import that runs when the file is imported must be an installable pin.
+    * An optional import (boto3, anthropic, certifi, openpyxl are all deliberately
+      lazy) only has to be *acknowledged*, so the commented-out ``anthropic``
+      line -- the agent falls back to its rule engine without it -- is correct.
+    """
+
+    def test_every_third_party_import_is_acknowledged(self):
+        imported, _hard = _third_party_by_scope()
+        template = _read("requirements.txt")
+        unacknowledged = sorted(
+            module
+            for module in imported
+            if not re.search(rf"\b{re.escape(module)}\b", template)
+        )
+        assert unacknowledged == [], (
+            "these modules are imported by the code but appear nowhere in "
+            f"requirements.txt: {unacknowledged}"
+        )
+
+    def test_every_module_scope_import_is_a_real_pin(self):
+        """A hard import cannot be satisfied by a comment."""
+        _imported, hard = _third_party_by_scope()
+        declared = set(_declared_packages())
+        missing = sorted(
+            module
+            for module in hard
+            if module not in declared and module not in DEV_TOOLING
+        )
+        assert missing == [], (
+            "these modules are imported at module scope, so they are required "
+            f"just to start the app, but are not pinned: {missing}"
+        )
+
+    def test_every_declared_package_is_imported_or_required_by_another(self):
+        """
+        A pin nothing needs is a dead pin. ``python-dateutil`` and ``werkzeug``
+        are legitimate: each is required by another declared package (botocore
+        needs python-dateutil, flask needs Werkzeug), which is why they are
+        pinned explicitly instead of left to the resolver.
+        """
+        import importlib.metadata as metadata
+
+        imported, _hard = _third_party_by_scope()
+        needed_by_others: Set[str] = set()
+        for package in _declared_packages():
+            try:
+                requirements = metadata.requires(package) or []
+            except Exception:  # not installed in this interpreter
+                continue
+            for requirement in requirements:
+                match = re.match(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
+                if match:
+                    needed_by_others.add(match.group(1).lower())
+
+        unjustified = sorted(
+            package
+            for package in _declared_packages()
+            if package.lower() not in imported
+            and package.lower() not in needed_by_others
+            and package.lower() not in DEV_TOOLING
+        )
+        assert unjustified == [], (
+            "pinned but neither imported nor required by another declared "
+            f"package: {unjustified}"
+        )
+
+    def test_the_template_can_actually_be_parsed_by_pip(self):
+        """Every declaration must be a real ``name==version`` pin."""
+        for line in _read("requirements.txt").splitlines():
+            stripped = line.split("#")[0].strip()
+            if not stripped:
+                continue
+            assert re.fullmatch(r"[A-Za-z0-9._-]+==[A-Za-z0-9._+-]+", stripped), (
+                f"unparseable requirement line: {line!r}"
+            )

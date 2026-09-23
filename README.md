@@ -116,6 +116,10 @@ cd agent_followship
 pip install -r requirements.txt
 ```
 
+That one command is enough for the dashboard, the demo and the whole test
+suite. See [Dependencies](#dependencies) for what each package is for and which
+ones are optional.
+
 3. **Run the interactive demo**
 
 ```bash
@@ -135,6 +139,31 @@ Then open your browser to: `http://localhost:8080`
 > The dashboard is `web/app.py` (there is no top-level `app.py`) and it listens on
 > port **8080**. The port is fixed in `web/app.py`; the script does not accept a
 > `--port` flag.
+
+### Dependencies
+
+`requirements.txt` is the single source of truth. What each package is for:
+
+| Package | Needed for | If it is missing |
+|---|---|---|
+| `flask`, `werkzeug` | the web dashboard (`web/app.py`) | the dashboard cannot start; the demo and tests still run |
+| `boto3`, `botocore` | the `send_sms` / `send_email` AWS tools | those two tools return `error_code: "config_missing"`; everything else works |
+| `openpyxl` | reading `.xlsx` patient lists on upload | an `.xlsx` upload returns "pip install openpyxl"; CSV/TSV/JSON/TXT keep working |
+| `certifi` | the CA trust store for outbound HTTPS and SMTP | live sends fail with `CERTIFICATE_VERIFY_FAILED` on a macOS python.org install, which ships no CAs until "Install Certificates" is run |
+| `python-dateutil` | pinned because `botocore` requires it | — (nothing in this project imports it directly) |
+| `pytest`, `pytest-cov` | the test suite | — |
+| `flake8`, `black`, `mypy`, `sphinx` | linting, formatting, type checks, docs | — |
+
+Only `flask` is imported at module scope. `boto3`, `botocore`, `openpyxl`, `certifi`
+and `anthropic` are all imported lazily *inside* the function that needs them, which
+is why the offline demo and the entire test suite run with no cloud SDKs, no
+credentials and no network.
+
+**Deliberately not installed by default:** `anthropic` (the CLI/`tools/` LLM
+tool-use loop and the agent's LLM DECIDE step) and `twilio` are commented out in
+`requirements.txt` because they are optional — see *Enabling Claude for DECIDE*
+below. Without `anthropic` the agent falls back to its rule engine rather than
+failing.
 
 ## 🏥 Hospital Setup
 
