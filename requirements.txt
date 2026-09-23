@@ -4,7 +4,9 @@
 flask==3.0.0
 werkzeug==3.0.1
 
-# Date/Time handling
+# Date/Time handling. Not imported by this project's own code -- it is an
+# explicit pin of botocore's requirement (botocore needs python-dateutil>=2.1),
+# kept visible so the resolved version is reproducible.
 python-dateutil==2.8.2
 
 # For future LLM integration (optional)
@@ -23,6 +25,11 @@ python-dateutil==2.8.2
 # Messaging SMS + Amazon SES). Imported lazily: without it those two tools
 # report error_code "config_missing" and everything else keeps working.
 boto3==1.35.36
+
+# Reads .xlsx patient lists uploaded to the dashboard. Imported lazily inside
+# utils/llm_parser._parse_excel: without it an .xlsx upload returns a clear
+# "pip install openpyxl" message and CSV/JSON/TXT uploads keep working.
+openpyxl==3.1.2
 
 # Development and Testing
 pytest==7.4.3

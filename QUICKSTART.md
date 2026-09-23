@@ -76,7 +76,9 @@ curl -X POST http://localhost:8080/api/upload-patient-list -F "file=@patients.cs
 curl -X POST http://localhost:8080/api/import-patients   -F "file=@patients.csv"
 ```
 
-CSV, TSV, JSON, TXT, XLSX and XLS are accepted. Rows without a usable name or
+CSV, TSV, JSON, TXT and XLSX are accepted (`.xlsx` needs the `openpyxl` package
+from `requirements.txt`; the older binary `.xls` format is not supported, so save
+it as `.xlsx` or CSV first). Rows without a usable name or
 contact detail are reported in `skipped_count`; rows whose `patient_id` already
 exists are listed in `duplicate_patients` and are **not** overwritten.
 
@@ -202,6 +204,7 @@ Setup:
 
 ```bash
 .venv/bin/pip install boto3            # required by the two AWS tools only
+.venv/bin/pip install openpyxl         # required for .xlsx patient-list uploads
 export AWS_REGION=ap-southeast-1
 export AWS_SES_SOURCE=martinchenonly1@gmail.com
 export AWS_SES_CONFIGURATION_SET=patient-followup   # makes delivery verifiable
@@ -353,14 +356,17 @@ curl -X POST http://localhost:8080/api/simulate-reply \
 
 ## Troubleshooting
 
-### Port 5000 already in use
+### Port 8080 already in use
 
-```bash
-# Use a different port
-python app.py --port 8080
+The dashboard port is set in `web/app.py`. Edit that line:
+
+```python
+port = 8080  # change this, e.g. to 8090
 ```
 
-Or modify `app.py`:
+`web/app.py` does **not** read a `--port` flag, so passing one is silently ignored.
+
+Or modify `web/app.py`:
 ```python
 app.run(debug=True, host='0.0.0.0', port=8080)
 ```
@@ -379,7 +385,7 @@ pip install -r requirements.txt
 
 The sample data is automatically initialized when running:
 - `python demo.py`
-- `python app.py`
+- `python web/app.py`
 
 For manual initialization:
 ```python

@@ -19,7 +19,7 @@ Dental clinics face challenges maintaining consistent follow-up schedules as the
   failed and routes around it (channel fallback, then escalation) instead of
   crashing or claiming success
 - **🎯 Clinical Prioritization**: Urgency-based on treatment type and patient history
-- **📤 Smart Data Import**: Upload a patient list (CSV/TSV/JSON/TXT/XLSX/XLS) and
+- **📤 Smart Data Import**: Upload a patient list (CSV/TSV/JSON/TXT/XLSX) and
   the agent imports it and immediately runs a cycle, so the rows show up as cases
   on the main dashboard in the same request
 - **🏥 Bring Your Own LLM**: Any provider (Claude, OpenAI, Azure, self-hosted
@@ -127,10 +127,14 @@ This will guide you through all agent capabilities with sample data.
 4. **Launch the web dashboard**
 
 ```bash
-python app.py
+python web/app.py
 ```
 
-Then open your browser to: `http://localhost:5000`
+Then open your browser to: `http://localhost:8080`
+
+> The dashboard is `web/app.py` (there is no top-level `app.py`) and it listens on
+> port **8080**. The port is fixed in `web/app.py`; the script does not accept a
+> `--port` flag.
 
 ## 🏥 Hospital Setup
 
@@ -315,8 +319,10 @@ export SMTP_PASSWORD='the app password'   # hospital_setup.py reads .env and the
 #### Option 1: Web Dashboard (Recommended)
 
 ```bash
-python app.py
+python web/app.py
 ```
+
+Then open `http://localhost:8080`.
 
 Features:
 - Real-time case monitoring
@@ -370,18 +376,155 @@ print(stats)
 
 ### Configuration
 
-Edit `config.py` to customize clinic policies:
+There are two ways to configure the agent. **Use `.env`** unless you have a
+reason not to — it needs no code changes.
+
+| Way | Best for | How |
+|---|---|---|
+| **`.env` file** (recommended) | Normal use, and anything secret | `cp .env.example .env`, then edit it |
+| **`hospital_setup.py`** | A clinic onboarding system, or generating the config programmatically | Edit the `LLM` / `EMAIL` / `AGENT` blocks, then call `apply()` — see [Hospital Setup](#-hospital-setup) |
+
+Both paths end up in the same place: `hospital_setup.py` writes environment
+variables that the agent reads, so the two are compatible and either can be used
+on its own. Every variable below is optional — the defaults are safe, and the
+agent stays in dry-run mode until you deliberately switch it off.
+
+#### Where the configuration is read from
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MESSAGING_ENV_FILE` | `.env` | Path to the file `load_env_file()` reads instead of `./.env`. Useful when a clinic keeps its secrets outside the repository. |
+
+Precedence: a variable **already exported in your shell wins** over the file,
+unless a caller passes `override=True` (which is what `hospital_setup.py apply()`
+does). So to override something that `apply()` wrote, set it *after* calling
+`apply()`.
+
+#### 1. Safety switches
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MESSAGING_DRY_RUN` | `1` (on) | Tool-layer master switch. When on, every send is **simulated** and no network call is made. Set to `0` to allow real transmission. |
+| `AGENT_LIVE_SENDS` | off | Second, independent switch read by the agent loop. Live sending needs **both** this and `MESSAGING_DRY_RUN=0`. |
+
+See [The two-switch live gate](#the-two-switch-live-gate) for why there are two.
+
+#### 2. Clinic policy
+
+These drive clinical prioritisation and the escalation cap.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AGENT_HIGH_URGENCY_THRESHOLD_DAYS` | `30` | A patient this many days overdue is classed **high** urgency. |
+| `AGENT_CRITICAL_URGENCY_THRESHOLD_DAYS` | `60` | A patient this many days overdue is classed **critical** urgency and escalates to staff immediately. |
+| `AGENT_MAX_REMINDERS_BEFORE_ESCALATION` | `3` | After this many unanswered reminders, the case escalates to a human. |
+| `AGENT_REMINDER_INTERVAL_DAYS` | `7` | Minimum gap between reminders to the same patient. |
+
+Two policy settings have **no environment variable** and must be set in Python
+via `ClinicPolicyConfig` if a clinic needs to change them:
 
 ```python
 ClinicPolicyConfig(
-    working_hours=(9, 18),              # 9 AM to 6 PM
-    max_reminders_before_escalation=3,  # Escalate after 3 reminders
-    opt_out_respected=True,             # Honor opt-out requests
-    high_urgency_threshold_days=30,     # High urgency at 30 days
-    critical_urgency_threshold_days=60, # Critical at 60 days
-    reminder_interval_days=7            # Wait 7 days between reminders
+    working_hours=(9, 18),   # quiet hours; the agent will not contact outside these
+    opt_out_respected=True,  # honour a patient's opt-out request
 )
 ```
+
+The urgency thresholds are also settable in Python, which is what
+`hospital_setup.py` does when you set `AGENT.max_reminders_before_escalation`.
+The environment form above is the recommended one.
+
+#### 3. The hospital's own LLM
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AGENT_LLM_PROVIDER` | `anthropic` | `anthropic`, `openai`, `azure` or `disabled`. Vendor aliases such as `ollama`, `vllm`, `deepseek` all mean `openai` plus a base URL; an unrecognised value also means `anthropic`, so a typo can never take the agent offline. |
+| `AGENT_LLM_MODEL` | vendor default | Model id, e.g. `claude-sonnet-4-5`, `gpt-4o-mini`, `llama3.1:8b`. |
+| `AGENT_LLM_API_KEY` | — | The credential. Falls back, in order, to `LLM_API_KEY`, then the vendor variable (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`). |
+| `AGENT_LLM_BASE_URL` | — | Endpoint root. Required for a self-hosted or OpenAI-compatible server. |
+| `AGENT_LLM_API_VERSION` | — | Azure `api-version`. |
+| `AGENT_LLM_TIMEOUT_SECONDS` | `60` | Per-request timeout. |
+| `AGENT_LLM_MAX_TOKENS` | `1024` | Completion budget per decision. |
+| `AGENT_LLM_ORGANIZATION` | — | OpenAI organization header. |
+| `AGENT_LLM_EXTRA_HEADERS` | — | Extra request headers, as JSON. |
+| `AGENT_DECISION_MODEL` | — | Legacy alias for `AGENT_LLM_MODEL`; kept for compatibility. |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | Vendor-native credential names, accepted as fallbacks. |
+| `LLM_API_KEY` | — | Generic credential fallback, checked before the vendor variables. |
+
+`disabled` makes the agent fall back to the deterministic rule engine, which is
+also what happens whenever no credential is present. The LLM is never required.
+
+#### 4. The hospital's own domain mailbox (SMTP)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SMTP_HOST` | — | e.g. `smtp.office365.com`. There is **no `SMTP_PRESET` environment variable**; presets live in `hospital_setup.py` (see below). |
+| `SMTP_PORT` | `587` | |
+| `SMTP_USE_TLS` | `1` | STARTTLS. |
+| `SMTP_USE_SSL` | `0` | Implicit TLS (usually used with port 465). |
+| `SMTP_USERNAME` | — | Typically the full mailbox address. |
+| `SMTP_PASSWORD` | — | For Gmail / Google Workspace this must be a 16-character **App Password**. |
+| `EMAIL_FROM` | `SMTP_USERNAME` | The address patients see. Defaults to the username, which is correct for most providers. |
+| `EMAIL_FROM_NAME` | — | The friendly display name, e.g. `BrightSmile Dental Clinic`. |
+
+A *preset* is a convenience of `hospital_setup.py` only — set `EMAIL.preset` and
+it fills in the host/port/encryption when you call `apply()`. The available
+presets and the exact values they resolve to:
+
+| `EMAIL.preset` | Host | Port | Encryption |
+|---|---|---|---|
+| `microsoft365` | `smtp.office365.com` | 587 | STARTTLS |
+| `google` | `smtp.gmail.com` | 587 | STARTTLS |
+| `exmail` | `smtp.exmail.qq.com` | 465 | SSL |
+| `aliyun` | `smtp.qiye.aliyun.com` | 465 | SSL |
+| `zoho` | `smtp.zoho.com` | 587 | STARTTLS |
+| `fastmail` | `smtp.fastmail.com` | 587 | STARTTLS |
+| `workmail` | `smtp.mail.us-east-1.awsapps.com` | 465 | SSL |
+| `ses` | `email-smtp.ap-southeast-1.amazonaws.com` | 587 | STARTTLS |
+
+The `workmail` and `ses` hosts are region-bound as shown; set `SMTP_HOST`
+yourself if your region differs.
+
+#### 5. AWS SMS and SES
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AWS_REGION` | `ap-southeast-1` | Region for both AWS tools. Falls back to `AWS_DEFAULT_REGION`, then `ap-southeast-1`. |
+| `AWS_DEFAULT_REGION` | — | Standard AWS SDK fallback, read when `AWS_REGION` is unset. |
+| `AWS_SES_SOURCE` | `martinchenonly1@gmail.com` | The verified SES sender identity. **Must be an address verified in SES** or every send is rejected. |
+| `AWS_EMAIL_ALLOWED_ADDRESSES` | `martinchenonly1@gmail.com` | Comma-separated **recipient** allow-list for `send_email`. Replaces the default, and an empty value denies everything. |
+| `AWS_SMS_ALLOWED_NUMBERS` | `+6583536885` | Comma-separated recipient allow-list for `send_sms`. Same fail-closed behaviour. |
+| `AWS_SMS_ORIGINATION_IDENTITY` | — | Sender ID or long code. The API treats it as optional, but real delivery generally needs one. |
+| `AWS_SES_CONFIGURATION_SET` | — | Configuration set for delivery-event tracking. Omit and messages are sent without one. |
+
+Credentials themselves (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_PROFILE`, …) are read by `boto3`, not by this project — use the standard
+AWS mechanisms. See [Proving a message was delivered](#proving-a-message-was-delivered).
+
+#### 6. WhatsApp and Twilio (optional)
+
+Only needed if you use the `send_whatsapp_message` or `send_sms_message` tools;
+the AWS tools above do not depend on them.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `WHATSAPP_PROVIDER` | — | Selects the WhatsApp backend. |
+| `META_WHATSAPP_ACCESS_TOKEN` | — | Meta Cloud API token. |
+| `META_WHATSAPP_PHONE_NUMBER_ID` | — | Meta sender phone number id. |
+| `META_GRAPH_API_VERSION` | `v21.0` | Graph API version. |
+| `META_TEMPLATE_LANGUAGE` | `en` | Default template language. |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | — | Twilio credentials. |
+| `TWILIO_SMS_FROM` / `TWILIO_WHATSAPP_FROM` | — | Twilio sender numbers. |
+| `TWILIO_CONTENT_SIDS` | — | Comma-separated approved content template SIDs. |
+| `TWILIO_REQUIRE_CONTENT_SID` | `0` | When on, refuse any Twilio send lacking a content SID. |
+
+#### 7. Advanced
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MESSAGING_TIMEOUT_SECONDS` | `10.0` | Network timeout for the non-AWS channels. |
+| `MESSAGING_DEFAULT_COUNTRY_CODE` | — | Country code applied to numbers given without one. |
+| `SSL_CERT_FILE` | — | Path to a CA bundle, honoured by the project's TLS helper. Set this if you hit certificate errors — see [TLS trust stores](#tls-trust-stores). |
 
 ## 🔄 Agentic Loop Details
 
@@ -883,6 +1026,27 @@ The system includes 8 predefined test scenarios:
 
 ## 🌐 API Endpoints
 
+The dashboard runs on `http://localhost:8080` (`python web/app.py`). All
+endpoints below are relative to that. `GET /` serves the dashboard page itself.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/` | The dashboard HTML page |
+| GET | `/api/status` | Agent statistics and metrics |
+| GET | `/api/config` | The active clinic policy |
+| GET | `/api/patients` | Every patient in the system |
+| GET | `/api/cases` | Active cases |
+| GET | `/api/cases/{patient_id}` | One case in detail |
+| GET | `/api/escalations` | Escalated cases |
+| GET | `/api/audit-logs` | The audit trail |
+| GET | `/api/available-slots/{patient_id}` | Bookable dates for a patient |
+| POST | `/api/run-cycle` | Trigger a daily cycle manually |
+| POST | `/api/simulate-reply` | Simulate a patient reply |
+| POST | `/api/upload-patient-list` | Parse an uploaded list (preview only) |
+| POST | `/api/import-patients` | Store the rows and run a cycle |
+| POST | `/api/book-appointment` | Book an appointment manually |
+| POST | `/api/import-escalated-cases` | Import escalated cases as JSON |
+
 ### GET /api/status
 Get agent statistics and operational metrics.
 
@@ -922,10 +1086,14 @@ Trigger a daily agent cycle manually.
 Parse an uploaded patient list without storing it — returns the rows the agent
 understood, so the dashboard can show a preview before committing.
 
-**Request:** multipart form with a `file` field (CSV, TSV, JSON, TXT, XLSX, XLS).
+**Request:** multipart form with a `file` field. Accepted formats are CSV, TSV,
+JSON, TXT and XLSX. A legacy binary `.xls` is **not** supported -- Excel's older
+format is a different container; save it as `.xlsx` or CSV and upload that.
+Reading `.xlsx` needs the `openpyxl` package (in `requirements.txt`); without it
+the endpoint returns a message saying so.
 
 ```bash
-curl -X POST http://localhost:5000/api/upload-patient-list \
+curl -X POST http://localhost:8080/api/upload-patient-list \
      -F "file=@patients.csv"
 ```
 
@@ -970,6 +1138,77 @@ Get audit logs with optional filtering.
 **Query Parameters:**
 - `patient_id`: Filter by patient
 - `limit`: Maximum entries (default: 50)
+
+### GET /api/config
+Returns the clinic policy the agent is actually running on. Useful for a
+dashboard, or to confirm that your `AGENT_*` settings took effect.
+
+```json
+{
+  "working_hours": [9, 18],
+  "max_reminders_before_escalation": 3,
+  "opt_out_respected": true,
+  "high_urgency_threshold_days": 30,
+  "critical_urgency_threshold_days": 60,
+  "reminder_interval_days": 7
+}
+```
+
+### GET /api/patients
+Every patient the agent knows about, regardless of case status.
+
+```json
+[
+  {
+    "patient_id": "P001",
+    "name": "Alice Tan",
+    "treatment_type": "cleaning",
+    "last_visit_date": "2024-01-15",
+    "recall_interval_days": 180,
+    "preferred_channel": "sms",
+    "no_show_history": false
+  }
+]
+```
+
+Makes no agent calls and does not run a cycle, so it is safe to poll.
+
+### GET /api/available-slots/{patient_id}
+The next 10 bookable dates for a patient, for the booking UI.
+
+```json
+["2024-12-16", "2024-12-17", "2024-12-18"]
+```
+
+Returns `404` with `{"error": "Case not found"}` when the patient has no active
+case.
+
+### POST /api/book-appointment
+Book an appointment on a patient's behalf. The appointment is written to the
+audit trail as `manual_booking`.
+
+**Request:**
+```json
+{"patient_id": "P001", "appointment_date": "2024-12-15"}
+```
+
+**Response:**
+```json
+{"success": true, "booked_date": "2024-12-15"}
+```
+
+`success` is `false` when the slot is unavailable, and the requested date is not
+then used. Missing fields return `400`; an unknown patient returns `404`.
+
+### POST /api/import-escalated-cases
+Restore escalated cases from JSON, using the `EscalationHandler` record format.
+This is the way to re-import cases that were exported for a human to work
+through.
+
+**Request:**
+```json
+{"escalated_cases": [{"patient_id": "P003", "reason": "no_response"}]}
+```
 
 ## 🎓 Design Principles
 

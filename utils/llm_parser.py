@@ -17,6 +17,26 @@ import re
 from core.models import PatientRecord, ContactChannel
 
 
+def _cell_text(value: Any) -> str:
+    """
+    Render one worksheet cell as text for :meth:`_standardize_patient_data`.
+
+    Excel stores everything typed, so a date arrives as a ``datetime`` and an
+    integer id as a float. Left alone, a date would become
+    ``2024-01-15 00:00:00``, which the date parser cannot read, and an id would
+    gain a ``.0``.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        if value.time() == datetime.min.time():
+            return value.date().isoformat()
+        return value.isoformat(sep=" ")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
 class LLMPatientParser:
     """
     Intelligent patient data parser using LLM.
@@ -54,8 +74,8 @@ class LLMPatientParser:
         # Determine file type
         if filename.endswith('.csv'):
             return self._parse_csv(file_content)
-        elif filename.endswith(('.xlsx', '.xls')):
-            return self._parse_excel(file_content)
+        elif filename.lower().endswith(('.xlsx', '.xlsm', '.xls')):
+            return self._parse_excel(file_content, filename)
         elif filename.endswith('.json'):
             return self._parse_json(file_content)
         elif filename.endswith('.txt'):
@@ -76,16 +96,54 @@ class LLMPatientParser:
         # Use LLM or rule-based mapping to standardize fields
         return [self._standardize_patient_data(row) for row in rows]
     
-    def _parse_excel(self, content: bytes) -> List[Dict[str, Any]]:
+    def _parse_excel(self, content: bytes, filename: str = "") -> List[Dict[str, Any]]:
         """
-        Parse Excel file.
-        
-        Note: For demo, we'll simulate Excel parsing.
-        In production, use libraries like openpyxl or pandas.
+        Parse an ``.xlsx`` / ``.xlsm`` workbook.
+
+        ``openpyxl`` is imported lazily so that the rest of the project keeps
+        working when it is absent -- and so that the failure explains itself
+        instead of surfacing as a ``UnicodeDecodeError`` from reading the ZIP
+        container as text.
         """
-        # For now, treat as CSV (simplified)
-        # In production: use openpyxl or pandas
-        return self._parse_csv(content)
+        if filename.lower().endswith('.xls'):
+            raise ValueError(
+                "Legacy .xls workbooks are not supported. Save the sheet as "
+                ".xlsx (or .csv) and upload that."
+            )
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            raise ValueError(
+                "Reading .xlsx needs the openpyxl package: pip install openpyxl. "
+                "Alternatively save the patient list as .csv."
+            ) from exc
+
+        try:
+            workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        except Exception as exc:
+            raise ValueError(f"Could not read the workbook: {exc}") from exc
+
+        try:
+            rows = workbook.active.iter_rows(values_only=True)
+            try:
+                header = [_cell_text(cell) for cell in next(rows)]
+            except StopIteration:
+                return []
+
+            patients: List[Dict[str, Any]] = []
+            for row in rows:
+                values = [_cell_text(cell) for cell in (row or ())]
+                if not any(values):
+                    continue
+                record = {
+                    header[index]: values[index]
+                    for index in range(min(len(header), len(values)))
+                    if header[index]
+                }
+                patients.append(self._standardize_patient_data(record))
+            return patients
+        finally:
+            workbook.close()
     
     def _parse_json(self, content: bytes) -> List[Dict[str, Any]]:
         """Parse JSON file with flexible schema."""

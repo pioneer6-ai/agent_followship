@@ -203,7 +203,7 @@ Patient Reply
 ### 3. Patient-list import (upload → dashboard)
 
 ```
-File upload (CSV / TSV / JSON / TXT / XLSX / XLS)
+File upload (CSV / TSV / JSON / TXT / XLSX via openpyxl; not legacy .xls)
     │
     ▼
 POST /api/upload-patient-list            web/app.py
@@ -610,7 +610,7 @@ and no network: `FakeTransport` / `FakeSmtpConnection` record requests,
 so the agent's failure handling is exercised without touching a provider.
 
 ```bash
-.venv/bin/python -m pytest tests/ -q          # 525 tests
+.venv/bin/python -m pytest tests/ -q          # 549 tests
 .venv/bin/python -m tools.demo_tool_use       # 3 scenarios, 11 checks
 ```
 
@@ -668,14 +668,14 @@ drives the real `FollowUpAgentOrchestrator` and asserts on what the agent *did*:
 
 ### Development
 ```bash
-python app.py
+python web/app.py          # dashboard on http://localhost:8080
 # Or
-python demo.py
+python demo.py             # offline interactive demo
 ```
 
 ### Production (Example with Gunicorn)
 ```bash
-gunicorn -w 4 -b 0.0.0.0:8000 app:app
+gunicorn -w 4 -b 0.0.0.0:8000 web.app:app
 ```
 
 ### Docker (Future)
