@@ -31,6 +31,26 @@ agent_followship/
 │   ├── sample_data.py         # Sample data generator
 │   └── demo.py                # Interactive demonstration
 │
+├── LLM Tool Layer (tools/)
+│   ├── result.py              # ToolResult - never-raising return type
+│   ├── errors.py              # Error taxonomy + channel fallback table
+│   ├── config.py              # Env-driven MessagingConfig + templates
+│   ├── transport.py           # HTTP/SMTP transports + fake test doubles
+│   ├── providers.py           # MessageProvider: Meta, Twilio, SMTP
+│   ├── messaging.py           # Deterministic tools + ToolRegistry
+│   ├── schemas.py             # Anthropic tool schemas
+│   ├── llm_agent.py           # Claude tool-use loop + AgentRun
+│   └── demo_tool_use.py       # Offline 3-scenario demonstration
+│
+├── Tests (tests/)
+│   ├── conftest.py            # Shared fixtures (env, registry)
+│   ├── test_error_taxonomy.py # Provider code -> normalized error map
+│   ├── test_tool_contract.py  # ToolResult invariants, "never raises"
+│   ├── test_providers.py      # Meta/Twilio/SMTP payloads + classification
+│   └── test_agent_loop.py     # Tool-use loop, fallback, escalation, audit
+│
+├── .env.example               # Environment template (copy to .env)
+│
 └── Data (generated at runtime)
     └── audit_log.json         # Audit trail storage
 ```
@@ -179,7 +199,85 @@ demo.py
     ├── data_access.py
     ├── config.py
     └── sample_data.py
+
+tools/                        # LLM tool layer (self-contained, no imports from agent/)
+    ├── result.py             # ToolResult - never-raising return type
+    ├── errors.py             # Error taxonomy + channel fallback table
+    ├── config.py             # Env-driven MessagingConfig + templates
+    ├── transport.py          # HTTP/SMTP transports + fake test doubles
+    ├── providers.py          # MessageProvider: Meta, Twilio, SMTP
+    ├── messaging.py          # 6 tools + ToolRegistry dispatcher
+    ├── schemas.py            # Anthropic tool schemas
+    ├── llm_agent.py          # Claude tool-use loop + AgentRun
+    └── demo_tool_use.py      # Offline 3-scenario demonstration
 ```
+
+## LLM Tool Layer
+
+The tool layer inverts control relative to the orchestrator: instead of
+`orchestrator.py` calling `notifications.py` directly, a **model** chooses which
+tool to call and the deterministic tool performs exactly one provider attempt.
+
+```
+ToolUseAgent (tools/llm_agent.py)
+    │  1. send system prompt + tool schemas to Claude
+    │  2. Claude replies with text and/or tool_use blocks
+    ▼
+ToolRegistry.call(name, args)        # tools/messaging.py
+    │  always returns a ToolResult - never raises
+    ▼
+MessagingToolkit._send()             # one attempt, one provider
+    ▼
+MessageProvider.send()               # Meta/Twilio/SMTP
+    ▼
+Transport (urllib / smtplib)
+```
+
+### Why the tools never raise
+
+A provider rejection such as "recipient not verified" is normal traffic, not an
+exception. If the tool raised, the tool-use loop would break and the model would
+never learn why. Instead the outcome is normalized:
+
+```
+provider error (HTTP 400 + code 131030)
+    → SendErrorCode.RECIPIENT_NOT_VERIFIED
+    → ToolResult(status="failed", retryable=False,
+                 suggested_fallback_channels=["sms", "email"],
+                 hint="WhatsApp requires an opted-in recipient. Try SMS or email.")
+    → returned to the model as the tool_result payload
+    → model decides: retry on SMS, email the patient, or escalate_to_staff
+```
+
+Layer by layer:
+
+| Layer | Responsibility | Never raises? |
+|-------|----------------|---------------|
+| `transport.py` | Perform I/O; map `HTTPError`/`URLError`/`SMTPException` to a response | Yes, converts to a response object |
+| `providers.py` | Build the provider request, classify the response | Yes, returns `ProviderOutcome` |
+| `messaging.py` | Validate input, perform one attempt, build `ToolResult` | Yes, outer `except Exception` → `_unexpected` |
+| `llm_agent.py` | Dispatch `tool_use` blocks, feed results back | Yes, unknown tool → error payload |
+
+### Dry-run semantics
+
+Live sending is **opt-in**. `MESSAGING_DRY_RUN=0` is the only thing that permits
+transmission, and even then only for a channel that is configured - an
+unconfigured channel in live mode fails loudly with `config_missing` instead of
+pretending to send. With the flag unset (or `1`), every send is simulated
+regardless of credentials, so an accidentally populated `.env` cannot message a
+real patient. `MessagingConfig.simulates` / `.live_requested` expose the
+decision to the channel-listing tool.
+
+The `.env` file is not read implicitly: load it into the environment first
+(`set -a; . ./.env; set +a`) or pass an explicit mapping to
+`MessagingConfig.from_env()`.
+
+### Relation to the existing modules
+
+`tools/` is additive and does not import `agent/`, `core/`, or `utils/`. It is
+the intended replacement for the mock sending path in `agent/notifications.py`
+once the orchestrator is rewired; the schemas (`tools/schemas.py`) and the
+registry (`tools/messaging.py`) are the only surfaces a caller needs.
 
 ## Design Patterns
 
@@ -295,6 +393,16 @@ demo.py
 - Each module has isolated tests
 - Mock external dependencies
 - High code coverage (>80%)
+
+Tests live in `tests/` at the repository root. The tool-layer suite needs no
+credentials or network access: `FakeTransport` / `FakeSmtpConnection` record
+requests, and `ScriptedModelClient` replaces the Claude API with a deterministic
+script, so the whole tool-use loop is exercised offline.
+
+```bash
+.venv/bin/python -m pytest tests/ -q          # 179 tests
+.venv/bin/python -m tools.demo_tool_use       # 3 scenarios, 11 checks
+```
 
 ### Integration Tests
 - Test component interactions

@@ -67,6 +67,59 @@ stats = agent.get_statistics()
 print(stats)
 ```
 
+## Option 4: LLM Tool Layer (Message Sending)
+
+Send WhatsApp/SMS/email messages through LLM tool calling. No credentials and
+no network access are needed: the demonstration and tests are dry-run by
+default and use injected fake transports.
+
+```bash
+# Offline demonstration of all three scenarios
+.venv/bin/python -m tools.demo_tool_use
+
+# Run the tool-layer test suite
+.venv/bin/python -m pytest tests/ -q
+```
+
+Drive it from Python:
+
+```python
+from tools import build_tool_registry, get_tool_schemas
+
+registry = build_tool_registry()   # reads configuration from the environment
+
+result = registry.call(
+    "send_whatsapp_message",
+    {
+        "recipient": "+6591234567",
+        "template": "appointment_reminder",
+        "params": ["Sarah Johnson", "2026-04-12", "10:00 AM"],
+    },
+)
+
+print(result.status)                      # 'sent' | 'failed' | 'ok' | 'escalated'
+print(result.error_code)                  # e.g. 'recipient_not_verified'
+print(result.suggested_fallback_channels) # e.g. ['sms', 'email']
+
+tools = get_tool_schemas()  # pass to the Claude API as tools=[...]
+```
+
+The tools never raise: provider failures come back as a structured result, so
+the model can retry on another channel, email the patient, or escalate to staff.
+
+To send for real:
+
+```bash
+cp .env.example .env    # fill in credentials, then set MESSAGING_DRY_RUN=0
+set -a; . ./.env; set +a
+```
+
+Nothing is transmitted while `MESSAGING_DRY_RUN` is unset, even with
+credentials present.
+
+For live Claude tool use: `pip install anthropic`, set `ANTHROPIC_API_KEY`, and
+use `tools.llm_agent.ToolUseAgent` with `create_anthropic_client()`.
+
 ## Key Concepts
 
 ### The Agentic Loop

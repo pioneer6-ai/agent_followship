@@ -60,6 +60,21 @@ Dental clinics face challenges maintaining consistent follow-up schedules as the
 - **`sample_data.py`**: Test data generator
 - **`demo.py`**: Interactive demonstration script
 
+### Messaging Tool Layer (`tools/`)
+
+A self-contained package that exposes message sending as **LLM tool use /
+function calling**. See [LLM Tool Layer](#-llm-tool-layer-function-calling).
+
+- **`tools/result.py`**: `ToolResult` - the never-raising return type
+- **`tools/errors.py`**: Error taxonomy and channel fallback table
+- **`tools/config.py`**: Environment-driven configuration + templates
+- **`tools/transport.py`**: HTTP/SMTP transports (real + fake test doubles)
+- **`tools/providers.py`**: Meta WhatsApp, Twilio, SMTP implementations
+- **`tools/messaging.py`**: The six deterministic tools + registry
+- **`tools/schemas.py`**: Anthropic tool schemas
+- **`tools/llm_agent.py`**: Claude tool-use loop + `AgentRun` bookkeeping
+- **`tools/demo_tool_use.py`**: Offline 3-scenario demonstration
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -248,6 +263,133 @@ The system includes 12 diverse patient profiles:
 | Lisa Martinez | Checkup | 15 | LOW | General checkup overdue |
 | ... | ... | ... | ... | ... |
 
+## 🧰 LLM Tool Layer (Function Calling)
+
+The `tools/` package implements the sending half of the loop below. The LLM
+only **decides**; every provider call happens inside a deterministic Python
+function that can never raise.
+
+```
+LLM Agent (Claude API, tool use)
+     │  "this patient is due for a reminder" → tool_use block
+     ▼
+send_whatsapp_message(phone, template, params)   ← deterministic function
+     │  exactly one provider attempt
+     ▼
+WhatsApp Business API / Twilio / SMTP email
+```
+
+### Available tools
+
+| Tool | Purpose |
+|------|---------|
+| `send_whatsapp_message` | Send a templated WhatsApp message |
+| `send_sms_message` | Send an SMS message |
+| `send_email_message` | Send an email message |
+| `get_candidate_send_channels` | Which channels are usable for a patient |
+| `list_message_templates` | Templates and their required parameters |
+| `escalate_to_staff` | Hand the case to a human with a reason |
+
+### The failure protocol
+
+Tools return a structured `ToolResult` instead of raising. The model reads
+`to_payload()` and decides what to do next. A WhatsApp rejection for a
+non-opted-in recipient looks like this:
+
+```json
+{
+  "status": "failed",
+  "channel": "whatsapp",
+  "recipient": "+15550001111",
+  "error_code": "recipient_not_verified",
+  "message": "Recipient phone number not in allowed list",
+  "provider_code": "131030",
+  "retryable": false,
+  "suggested_fallback_channels": ["sms", "email"],
+  "hint": "The recipient has not opted in / is not in the provider allow-list ... switch to another channel the patient has consented to."
+}
+```
+
+`status` is one of:
+
+- `sent` - a real (or simulated) message was handed to a provider
+- `failed` - the attempt was rejected or errored; check `retryable`
+- `ok` - an informational tool (`get_candidate_send_channels`, `list_message_templates`)
+- `escalated` - the case was handed to a human via `escalate_to_staff`
+
+The tool deliberately does **not** silently retry on another channel: it
+reports the normalized failure, and the LLM chooses the fallback. That keeps
+the decision with the model while the mechanics stay deterministic.
+
+Normalized error codes: `recipient_not_verified`, `invalid_recipient`,
+`opted_out`, `outside_messaging_window`, `template_not_found`,
+`template_param_mismatch`, `rate_limited`, `auth_failed`, `config_missing`,
+`provider_unavailable`, `network_error`, `invalid_request`, `unknown`.
+
+### Quick start
+
+```bash
+# Offline demonstration - no credentials needed (dry run by default)
+.venv/bin/python -m tools.demo_tool_use
+
+# Run the tool-layer test suite
+.venv/bin/python -m pytest tests/ -q
+```
+
+```python
+from tools import build_tool_registry, get_tool_schemas
+
+registry = build_tool_registry()          # reads config from the environment
+
+# What the model does:
+result = registry.call(
+    "send_whatsapp_message",
+    {
+        "recipient": "+6591234567",
+        "template": "appointment_reminder",
+        "params": ["Sarah Johnson", "2026-04-12", "10:00 AM"],
+    },
+)
+
+print(result.status)                      # 'sent' | 'failed' | ...
+print(result.error_code)                  # e.g. 'recipient_not_verified'
+print(result.suggested_fallback_channels) # e.g. ['sms', 'email']
+
+# What you pass to the Claude API:
+tools = get_tool_schemas()
+```
+
+Real Claude tool use (requires `pip install anthropic` and `ANTHROPIC_API_KEY`):
+
+```python
+from tools.llm_agent import ToolUseAgent, create_anthropic_client
+
+agent = ToolUseAgent(client=create_anthropic_client(), registry=registry)
+run = agent.run("Patient CASE-001 is 69 days overdue. Handle their follow-up.")
+print(run.sent, run.failures, run.escalated)
+```
+
+### Configuration
+
+Every provider is optional. Copy `.env.example` to `.env` for the full list of
+variables, then load it into the environment before running:
+
+```bash
+set -a; . ./.env; set +a     # bash/zsh; or use python-dotenv
+```
+
+**Nothing is sent for real until you set `MESSAGING_DRY_RUN=0`.** With the flag
+absent (or `1`), every send is simulated - even when credentials are present -
+so a filled-in `.env` cannot message a real patient by accident. Live mode
+additionally requires the channel to be configured; if it is not, the tool
+fails loudly with `config_missing` rather than pretending to send.
+
+| `MESSAGING_DRY_RUN` | credentials | result |
+|---------------------|-------------|--------|
+| unset / `1`         | anything    | simulated success, no network call |
+| `0`                 | present     | real provider call |
+| `0`                 | missing     | `failed` / `config_missing` |
+
 ## 🧪 Test Scenarios
 
 The system includes 8 predefined test scenarios:
@@ -397,16 +539,42 @@ class ProductionPatientDataStore(PatientDataStore):
 
 ### Adding LLM Integration
 
+The messaging tool layer already provides the LLM entry point - see
+[LLM Tool Layer](#-llm-tool-layer-function-calling). The LLM decides *whether*
+and *what* to send, while `tools/` performs the deterministic provider call:
+
 ```python
-message_composer = MessageComposerAgent(
-    use_llm=True,
-    llm_api_key="your-api-key"
-)
+from tools import build_tool_registry, get_tool_schemas
+
+registry = build_tool_registry()
+tools = get_tool_schemas()  # pass to the Claude API as `tools=[...]`
 ```
+
+### Adding a Messaging Provider
+
+Implement `MessageProvider` and register it with the config:
+
+```python
+from tools.providers import MessageProvider, ProviderOutcome
+
+class MyProvider(MessageProvider):
+    name = "mine"
+
+    def is_configured(self) -> bool:
+        return bool(self.config.my_api_key)
+
+    def send(self, request) -> ProviderOutcome:
+        # Perform exactly one attempt, then normalize the outcome.
+        return ProviderOutcome.ok(message_id="...")
+```
+
+See `tools/providers.py` for the Meta/Twilio/SMTP implementations, and
+`tools/errors.py` for the normalized error vocabulary.
 
 ## 📈 Future Enhancements
 
-- [ ] LLM-powered message generation (OpenAI/Claude integration)
+- [x] LLM-powered message sending (Claude tool use - see `tools/`)
+- [ ] LLM-powered free-text message generation
 - [ ] Voice call automation (Twilio integration)
 - [ ] Sentiment analysis for escalation
 - [ ] Predictive no-show detection
