@@ -110,6 +110,55 @@ DEFAULT_TEMPLATES: Dict[str, TemplateSpec] = {
 }
 
 
+def load_env_file(path: Optional[str] = None, *, override: bool = False) -> int:
+    """
+    Populate ``os.environ`` from a ``.env`` file, if one can be found.
+
+    The tool layer reads configuration straight from the environment, so a process
+    that wants live sends has to export ``.env`` itself. This helper does that
+    without adding a dependency, and is deliberately conservative:
+
+    * an existing environment variable always wins unless ``override`` is set, so
+      an explicitly exported value is never clobbered by the file;
+    * a missing or unreadable file is not an error -- it returns 0, which is the
+      normal case in tests and CI;
+    * only simple ``KEY=VALUE`` lines are understood; ``#`` comments and blank
+      lines are skipped, and surrounding quotes on the value are stripped.
+
+    Args:
+        path: File to read. Defaults to ``$MESSAGING_ENV_FILE`` or ``./.env``.
+        override: When True, values in the file replace existing environment ones.
+
+    Returns:
+        Number of variables actually applied.
+    """
+    resolved = path or os.environ.get("MESSAGING_ENV_FILE") or ".env"
+    try:
+        with open(resolved, "r", encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return 0
+
+    applied = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if override or key not in os.environ:
+            os.environ[key] = value
+            applied += 1
+    return applied
+
+
 def _env_bool(
     source: Mapping[str, str], name: str, default: Optional[bool] = None
 ) -> Optional[bool]:

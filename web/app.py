@@ -33,11 +33,13 @@ from utils.llm_parser import LLMPatientParser
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 
-# Initialize the agent orchestrator
+# Initialize the agent orchestrator. DECIDE goes through Claude when
+# ANTHROPIC_API_KEY is set (the LLM may only pick actions the rule engine
+# permits); with no key it runs rules-only, so this is safe offline.
 data_store = MockPatientDataStore()
 calendar = MockCalendarIntegration()
 policy = ClinicPolicyConfig()
-agent = FollowUpAgentOrchestrator(data_store, calendar, policy)
+agent = FollowUpAgentOrchestrator.with_llm_decisions(data_store, calendar, policy)
 
 # Initialize LLM parser
 llm_parser = LLMPatientParser(use_llm=False)  # Set to True with API key for real LLM

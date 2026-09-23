@@ -9,50 +9,60 @@ agent_followship/
 ├── ARCHITECTURE.md             # This file - system architecture
 ├── LICENSE                     # MIT License
 ├── requirements.txt            # Python dependencies
-├── .gitignore                 # Git ignore patterns
+├── .gitignore                  # Git ignore patterns
+├── demo.py                     # Interactive demonstration
+├── .env.example                # Environment template (copy to .env)
 │
-├── Core Agent System
-│   ├── models.py              # Data models and enums
-│   ├── actions.py             # Agent action definitions
-│   ├── config.py              # Configuration settings
-│   ├── data_access.py         # Data store and calendar interfaces
-│   ├── business_rules.py      # Rule engine and urgency scoring
-│   ├── notifications.py       # Multi-channel messaging
-│   ├── conversation.py        # Intent recognition and conversation management
-│   ├── action_handlers.py     # Scheduler, escalation, audit logging
-│   └── orchestrator.py        # Main agentic loop orchestrator
+├── core/                       # Domain types, no behaviour
+│   ├── models.py               # PatientRecord, FollowUpCase, enums
+│   ├── actions.py              # AgentAction
+│   ├── config.py               # ClinicPolicyConfig
+│   └── data_access.py          # PatientDataStore / CalendarIntegration (+ mocks)
 │
-├── Web Application
-│   ├── app.py                 # Flask application and REST API
+├── agent/                      # The agentic loop
+│   ├── business_rules.py       # RecallRuleEngine, UrgencyScorer
+│   ├── conversation.py         # Intent recognition, ConversationManager
+│   ├── notifications.py        # Channel classes + build_notification_channels()
+│   ├── delivery.py             # NotificationOutcome, offline vs live backends
+│   ├── decision.py             # RuleDecisionEngine, LlmDecisionEngine
+│   ├── action_handlers.py      # Scheduler, EscalationHandler, AuditLogger
+│   └── orchestrator.py         # FollowUpAgentOrchestrator: PERCEIVE/DECIDE/ACT/OBSERVE
+│
+├── web/                        # Web application
+│   ├── app.py                  # Flask application and REST API
 │   └── templates/
-│       └── dashboard.html     # Web dashboard interface
+│       └── dashboard.html      # Web dashboard interface
 │
-├── Demo and Testing
-│   ├── sample_data.py         # Sample data generator
-│   └── demo.py                # Interactive demonstration
+├── utils/
+│   ├── sample_data.py          # Sample data generator
+│   └── llm_parser.py           # Flexible patient-list import
 │
-├── LLM Tool Layer (tools/)
-│   ├── result.py              # ToolResult - never-raising return type
-│   ├── errors.py              # Error taxonomy + channel fallback table
-│   ├── config.py              # Env-driven MessagingConfig + templates
-│   ├── transport.py           # HTTP/SMTP transports + fake test doubles
-│   ├── providers.py           # MessageProvider: Meta, Twilio, SMTP
-│   ├── messaging.py           # Deterministic tools + ToolRegistry
-│   ├── schemas.py             # Anthropic tool schemas
-│   ├── llm_agent.py           # Claude tool-use loop + AgentRun
-│   └── demo_tool_use.py       # Offline 3-scenario demonstration
+├── tools/                      # LLM tool layer (function calling)
+│   ├── result.py               # ToolResult - never-raising return type
+│   ├── errors.py               # Error taxonomy + channel fallback table
+│   ├── config.py               # Env-driven MessagingConfig + templates
+│   ├── tls.py                  # CA bundle / SSL context resolution
+│   ├── transport.py            # HTTP/SMTP transports + fake test doubles
+│   ├── providers.py            # MessageProvider: Meta, Twilio, SMTP
+│   ├── aws_providers.py        # MessageProvider: End User Messaging SMS, SES
+│   ├── messaging.py            # Deterministic tools + ToolRegistry
+│   ├── schemas.py              # Anthropic tool schemas
+│   ├── llm_agent.py            # Claude tool-use loop + AgentRun
+│   └── demo_tool_use.py        # Offline 3-scenario demonstration
 │
-├── Tests (tests/)
-│   ├── conftest.py            # Shared fixtures (env, registry)
-│   ├── test_error_taxonomy.py # Provider code -> normalized error map
-│   ├── test_tool_contract.py  # ToolResult invariants, "never raises"
-│   ├── test_providers.py      # Meta/Twilio/SMTP payloads + classification
-│   └── test_agent_loop.py     # Tool-use loop, fallback, escalation, audit
+├── scripts/
+│   └── ses_domain_setup.py     # Create/verify an SES sending domain
 │
-├── .env.example               # Environment template (copy to .env)
-│
-└── Data (generated at runtime)
-    └── audit_log.json         # Audit trail storage
+└── tests/
+    ├── conftest.py             # Shared fixtures (env, registry)
+    ├── test_error_taxonomy.py  # Provider code -> normalized error map
+    ├── test_tool_contract.py   # ToolResult invariants, "never raises"
+    ├── test_providers.py       # Meta/Twilio/SMTP payloads + classification
+    ├── test_aws_tools.py       # AWS SES / End User Messaging via fake clients
+    ├── test_agent_loop.py      # Tool-use loop, fallback, escalation, audit
+    └── test_agent_delivery.py  # The agent's own failure handling + decisions
+
+Generated at runtime: `audit_log.json` (audit trail), `escalations.json`.
 ```
 
 ## Component Diagram
@@ -135,13 +145,24 @@ User/Scheduler
     │   └─→ Returns: Prioritized [FollowUpCase, ...]
     │
     └─→ For each case:
-        ├─→ decide_action_for_case(case)
-        │   └─→ Returns: AgentAction
+        ├─→ _carry_forward(previous_case, case)
+        │   └─→ reminder_count / status / log survive the rebuild
         │
-        └─→ execute_action(case, action)
+        ├─→ _decide_for_case(case, today)
+        │   ├─→ decision_engine describes the case (DecisionContext)
+        │   ├─→ RuleDecisionEngine.permissible_actions(context)  # guardrail
+        │   ├─→ LlmDecisionEngine picks within that set (when configured)
+        │   └─→ Returns: ActionDecision(action, rationale, source)
+        │
+        └─→ _execute_action(case, decision, today)
             ├─→ message_composer.compose(case)
-            ├─→ channel.send(patient, message)
-            └─→ audit_logger.log_decision(...)
+            ├─→ _deliver_with_fallback(case, message)         # ACT
+            │   ├─→ for each reachable, not-yet-failed channel:
+            │   │     channel.send(patient, message)
+            │   │     └─→ Returns: NotificationOutcome  (never raises)
+            │   └─→ Returns: the successful outcome, or the last failure
+            ├─→ on total failure: _escalate_undeliverable(case, outcome, today)
+            └─→ audit_logger.log_decision(...) / log_communication(...)
 ```
 
 ### 2. Patient Reply Processing
@@ -178,14 +199,19 @@ Patient Reply
 
 ```
 orchestrator.py
-    ├── models.py (PatientRecord, FollowUpCase, Enums)
-    ├── config.py (ClinicPolicyConfig)
-    ├── data_access.py (PatientDataStore, CalendarIntegration)
-    ├── business_rules.py (RecallRuleEngine, UrgencyScorer)
-    ├── notifications.py (Channels, MessageComposer)
-    ├── conversation.py (ConversationManager)
-    ├── action_handlers.py (Scheduler, Escalation, Audit)
-    └── actions.py (AgentAction)
+    ├── core.models (PatientRecord, FollowUpCase, Enums)
+    ├── core.config (ClinicPolicyConfig)
+    ├── core.data_access (PatientDataStore, CalendarIntegration)
+    ├── core.actions (AgentAction)
+    ├── agent.business_rules (RecallRuleEngine, UrgencyScorer)
+    ├── agent.decision (RuleDecisionEngine, LlmDecisionEngine)
+    ├── agent.notifications (Channels, MessageComposer)
+    ├── agent.delivery (DeliveryBackend, NotificationOutcome)
+    ├── agent.conversation (ConversationManager)
+    └── agent.action_handlers (Scheduler, Escalation, Audit)
+
+agent.delivery / agent.decision
+    └── tools.messaging, tools.llm_agent    (one-way: agent -> tools)
 
 app.py
     ├── orchestrator.py
@@ -319,12 +345,22 @@ The `.env` file is not read implicitly: load it into the environment first
 (`set -a; . ./.env; set +a`) or pass an explicit mapping to
 `MessagingConfig.from_env()`.
 
-### Relation to the existing modules
+### Relation to the agent layer
 
-`tools/` is additive and does not import `agent/`, `core/`, or `utils/`. It is
-the intended replacement for the mock sending path in `agent/notifications.py`
-once the orchestrator is rewired; the schemas (`tools/schemas.py`) and the
-registry (`tools/messaging.py`) are the only surfaces a caller needs.
+The dependency runs one way: `agent/` imports `tools/`, never the reverse.
+`tools/` is the *transport* layer -- it knows how to talk to Meta, Twilio,
+SMTP, SES and End User Messaging, and it never raises. `agent/` is the
+*decision* layer -- it knows which patient to contact, on which channel, and
+what to do when that fails.
+
+They meet in exactly one place: `ToolkitDeliveryBackend`
+(`agent/delivery.py`) calls the tool registry and translates each `ToolResult`
+into a `NotificationOutcome`. That single seam is why the agent's fallback
+logic is testable with a scripted backend and no credentials.
+
+`agent/decision.py` is the other consumer of `tools/`: `LlmDecisionEngine`
+reuses `tools.llm_agent.create_anthropic_client` and the same tool-use loop,
+with `choose_next_action` as its tool.
 
 ## Design Patterns
 
@@ -352,6 +388,18 @@ registry (`tools/messaging.py`) are the only surfaces a caller needs.
 **Where:** Data access layer (`data_access.py`)
 **Why:** Abstract interfaces allow swapping mock/production implementations
 
+### 7. Strategy Pattern (DECIDE)
+**Where:** `agent/decision.py` -- `RuleDecisionEngine` and `LlmDecisionEngine`
+**Why:** Action selection is swappable without the orchestrator knowing which
+engine ran. The rule engine's `permissible_actions()` is also the guardrail, so
+the LLM can only choose from a set that is safe by construction.
+
+### 8. Chain of Responsibility (ACT)
+**Where:** `FollowUpAgentOrchestrator._deliver_with_fallback`
+**Why:** Each reachable channel gets one attempt in preference order, and the
+first success ends the chain. Total failure escalates rather than returning a
+false success.
+
 ## State Machine
 
 ### Case Status Transitions
@@ -364,9 +412,9 @@ registry (`tools/messaging.py`) are the only surfaces a caller needs.
              ├─→ run_daily_cycle()
              │
         ┌────▼────────────┐
-        │ MESSAGE_SENT    │
-        └────┬────────────┘
-             │
+        │ MESSAGE_SENT    │◄─┐ an OPEN status: the agent keeps
+        └────┬────────────┘  │ working the case, a reminder is
+             │               │ not an answer
              ├─→ Patient replies
              │
         ┌────▼────────────┐
@@ -378,6 +426,24 @@ registry (`tools/messaging.py`) are the only surfaces a caller needs.
              ├─→ Questions → ESCALATED
              └─→ No response + max reminders → ESCALATED
 ```
+
+`OPEN_STATUSES` = `{PENDING, MESSAGE_SENT, AWAITING_REPLY}`;
+`CLOSED_STATUSES` = `{BOOKED, DECLINED, ESCALATED}`.
+
+**Both** of the two rightmost transitions to `ESCALATED` are forced, not
+preferences, and both used to be unreachable:
+
+- *No response + max reminders* needs `reminder_count` to survive between
+  cycles. Each cycle rebuilds cases from the data store, so the previous cycle's
+  count is carried forward onto the fresh case before deciding
+  (`FollowUpAgentOrchestrator._carry_forward`). Without that, the counter resets
+  to zero daily and the cap can never be reached.
+- *Questions → ESCALATED* includes `ConversationManager.should_escalate`, which
+  escalates a critical case after one unanswered reminder -- a check that can
+  only fire if `reminder_count` is non-zero when it runs.
+
+A third route exists: if every reachable channel fails, the case is escalated
+regardless of the reminder budget (`_escalate_undeliverable`).
 
 ## Scalability Considerations
 
@@ -441,15 +507,28 @@ registry (`tools/messaging.py`) are the only surfaces a caller needs.
 - Mock external dependencies
 - High code coverage (>80%)
 
-Tests live in `tests/` at the repository root. The tool-layer suite needs no
-credentials or network access: `FakeTransport` / `FakeSmtpConnection` record
-requests, and `ScriptedModelClient` replaces the Claude API with a deterministic
-script, so the whole tool-use loop is exercised offline.
+Tests live in `tests/` at the repository root. The suite needs no credentials
+and no network: `FakeTransport` / `FakeSmtpConnection` record requests,
+`ScriptedModelClient` replaces the Claude API with a deterministic script, and
+`ScriptedBackend` (in `tests/test_agent_delivery.py`) scripts *delivery failures*
+so the agent's failure handling is exercised without touching a provider.
 
 ```bash
-.venv/bin/python -m pytest tests/ -q          # 179 tests
+.venv/bin/python -m pytest tests/ -q          # 364 tests
 .venv/bin/python -m tools.demo_tool_use       # 3 scenarios, 11 checks
 ```
+
+`tests/test_agent_delivery.py` is the proof of the agent layer's behaviour. It
+drives the real `FollowUpAgentOrchestrator` and asserts on what the agent *did*:
+
+- a failed send falls through to the patient's next channel
+- a channel that already failed is not retried
+- when every channel fails the case is escalated, never reported as sent
+- a patient who never replies still reaches the escalation cap across cycles
+- the LLM may only choose actions the rule engine permits, and every fallback
+  path (no client, out-of-bounds answer, API error, single option) degrades to
+  the rules
+- live sending requires both `MESSAGING_DRY_RUN=0` and `AGENT_LIVE_SENDS=1`
 
 ### Integration Tests
 - Test component interactions

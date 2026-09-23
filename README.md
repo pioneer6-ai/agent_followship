@@ -15,6 +15,9 @@ Dental clinics face challenges maintaining consistent follow-up schedules as the
 - **📝 Complete Audit Trail**: Full compliance logging for healthcare regulations
 - **🌐 Web Dashboard**: Real-time monitoring and control interface
 - **📱 Multi-Channel Communication**: SMS, WhatsApp, Email, Phone support
+- **🎯 Perceives Send Failures**: Real AWS/Gmail sending that reports *why* it
+  failed and routes around it (channel fallback, then escalation) instead of
+  crashing or claiming success
 - **🎯 Clinical Prioritization**: Urgency-based on treatment type and patient history
 - **📤 Smart Data Import**: Upload patient lists in any format - AI parses automatically
 - **🔍 LLM-Powered Parsing**: Handles inconsistent data formats intelligently
@@ -35,9 +38,17 @@ Dental clinics face challenges maintaining consistent follow-up schedules as the
 │  PERCEIVE      │   │    DECIDE       │   │    ACT      │
 │                │   │                 │   │             │
 │ • Data Store   │   │ • Rule Engine   │   │ • Scheduler │
-│ • Patient List │   │ • Urgency Score │   │ • Notifier  │
-│                │   │ • Conversation  │   │ • Escalator │
-└────────────────┘   └─────────────────┘   └─────────────┘
+│ • Patient List │   │ • Claude (tool  │   │ • Channels  │
+│                │   │   use) + rules  │   │ • Fallback  │
+│                │   │   as guardrail  │   │ • Escalator │
+└────────────────┘   └─────────────────┘   └──────┬──────┘
+                              │                   │
+                     ┌────────▼────────┐   ┌──────▼──────┐
+                     │    OBSERVE      │   │   PERCEIVE  │
+                     │                 │◄──│   failures  │
+                     │ • Reply Handler │   │ (retry on   │
+                     │ • Audit Logger  │   │ other chan.)│
+                     └─────────────────┘   └─────────────┘
                               │
                      ┌────────▼────────┐
                      │    OBSERVE      │
@@ -53,6 +64,8 @@ Dental clinics face challenges maintaining consistent follow-up schedules as the
 - **`data_access.py`**: Patient data and calendar integration interfaces
 - **`business_rules.py`**: Deterministic logic for overdue detection and urgency scoring
 - **`notifications.py`**: Multi-channel messaging system
+- **`delivery.py`**: `NotificationOutcome` + the delivery backends (offline vs live)
+- **`decision.py`**: DECIDE strategies - the rule engine and the Claude engine
 - **`conversation.py`**: Intent recognition and conversation management
 - **`action_handlers.py`**: Appointment scheduler, escalation, audit logging
 - **`orchestrator.py`**: Main agentic loop orchestration
@@ -203,39 +216,52 @@ overdue_cases = rule_engine.compute_overdue_patients(patients, today)
 
 ### Phase 2: DECIDE
 
-The agent evaluates and prioritizes:
+The agent chooses **one action per case**. Two engines implement the same
+interface (`DecisionEngine`); the rules define the *safe* choice space and the
+LLM picks inside it.
 
 ```python
-# Score urgency for each case
-for case in overdue_cases:
-    case.urgency = urgency_scorer.score(case)
+# The rule engine computes what is permissible, most-preferred first
+permissible = rule_engine.permissible_actions(context)   # the guardrail
 
-# Sort by priority
-prioritized_cases = urgency_scorer.sort_by_urgency(overdue_cases)
-
-# Decide action for each case
-action = decide_action_for_case(case)
+# With ANTHROPIC_API_KEY set, Claude chooses from that list via a
+# `choose_next_action` tool call. Its answer is validated against the same list,
+# and anything out of bounds falls back to the rules.
+action = decide_for_case(case, today)   # -> ActionDecision(source=...)
 ```
+
+`ActionDecision.source` records where the decision came from: `rules`, `llm`,
+`llm-guardrail` (the model answered out of bounds), `llm-error` (the API call
+failed) or `llm-disabled` (no key/package). The audit log keeps it, so a
+reviewer can always tell whether a human-facing choice was made by a model.
 
 ### Phase 3: ACT
 
-The agent executes decisions:
+The agent executes the decision, **and observes whether it worked**:
 
 ```python
-# Send reminder
-message = message_composer.compose(case)
-channel.send(patient, message)
+# Send reminder, falling back across channels on failure
+outcome = deliver_with_fallback(case, message)
+if not outcome.success:
+    # every reachable channel failed -> escalate, do not report success
+    escalate_undeliverable(case, outcome, today)
 
 # Book appointment
 scheduler.try_book(case)
 
-# Escalate to staff
+# Escalate to staff -> records the case AND emails AGENT_ESCALATION_EMAIL
 escalation_handler.escalate(case, reason)
 ```
 
+A send is never assumed to have worked. Each attempt returns a
+`NotificationOutcome` carrying `success`, `error_code`, `error_message`,
+`retryable`, `provider_code` and the provider's `suggested_fallbacks`. The
+agent tries the patient's other reachable channels in preference order, and if
+they all fail it escalates the case instead of silently moving on.
+
 ### Phase 4: OBSERVE
 
-The agent processes feedback:
+The agent processes feedback **and its own failures**:
 
 ```python
 # Handle patient reply
@@ -247,6 +273,12 @@ case.status = new_status
 # Log for audit
 audit_logger.log_decision(case, action, rationale)
 ```
+
+Observed failures are remembered in `agent.undelivered` and are *not* retried on
+a channel that already failed, so a dead number is not hammered every cycle.
+State that must survive across days (the reminder count, the status, the
+conversation log) is carried forward from the previous cycle, because each cycle
+rebuilds cases from the data store.
 
 ## 📊 Sample Data
 
@@ -262,6 +294,64 @@ The system includes 12 diverse patient profiles:
 | Robert Anderson | Cleaning | 10 | LOW | Routine cleaning slightly overdue |
 | Lisa Martinez | Checkup | 15 | LOW | General checkup overdue |
 | ... | ... | ... | ... | ... |
+
+## 🤖 Agent Decisions and Safety Gates
+
+### Can it decide on its own?
+
+Yes, within limits the rules define. Two things are deliberately separated:
+
+| Question | Answered by | Why |
+|---|---|---|
+| *Which* actions are safe for this case? | `RuleDecisionEngine.permissible_actions` | Clinical safety must not depend on a model being reachable or correct |
+| *Which* of those to take now? | Claude, via a `choose_next_action` tool call | Judgement (tone, timing, when to involve a person) is what a model is good at |
+
+The LLM can **never** take an action the rules did not offer. `ActionDecision.source`
+records which engine actually chose, so every decision is auditable.
+
+### What happens when a send fails?
+
+This is the behaviour the whole design exists for. A send returns a
+`NotificationOutcome`, never an exception:
+
+| Situation | `error_code` | What the agent does |
+|---|---|---|
+| Recipient not verified / not on the allow-list | `recipient_not_verified` | Try the patient's next reachable channel; escalate if none work |
+| Missing contact detail for that channel | `missing_recipient` | Skip that channel, try the next |
+| No automated sender exists (e.g. voice call) | `unsupported_channel` | Try the next channel |
+| Account not onboarded to the service | `not_subscribed` | Try the next channel, then escalate -- a human must fix this |
+| Provider/network problem | `provider_unavailable`, `network_error` | Try the next channel |
+| Body or subject empty | `invalid_request` | Treat as a bug; recorded, not retried forever |
+
+The agent **never** reports a reminder as sent when it was not, and a case is
+never abandoned: once the reminder budget
+(`ClinicPolicyConfig.max_reminders_before_escalation`) is spent, or every channel
+has failed, the case is escalated and staff are alerted.
+
+### The two-switch live gate
+
+Real sends require **both** switches, so a populated `.env` can never make
+`python demo.py` message a real patient:
+
+```bash
+MESSAGING_DRY_RUN=0   # tools layer: allow real transmission
+AGENT_LIVE_SENDS=1    # agent layer: I mean it for the agent too
+```
+
+With either one missing, the agent uses `PrintDeliveryBackend` and prints what it
+would have sent. See `is_configured_for_live_sends()` in `agent/delivery.py`.
+
+### Enabling Claude for DECIDE
+
+```bash
+pip install anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+export AGENT_DECISION_MODEL=claude-sonnet-4-5   # optional
+```
+
+With no key the agent runs rules-only -- identical behaviour, no error. The web
+app already uses this path (`FollowUpAgentOrchestrator.with_llm_decisions`), so
+setting the key is the only step needed.
 
 ## 🧰 LLM Tool Layer (Function Calling)
 

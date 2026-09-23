@@ -7,7 +7,7 @@ comprehensive audit logging for compliance and accountability.
 """
 
 from datetime import date, datetime
-from typing import Optional
+from typing import Callable, Optional
 import json
 from pathlib import Path
 
@@ -19,7 +19,7 @@ from core.data_access import CalendarIntegration
 class AppointmentScheduler:
     """
     Handles appointment booking and rescheduling operations.
-    
+
     This component bridges the agent's decision-making with the
     actual calendar system, converting intent into concrete appointments.
     """
@@ -27,7 +27,7 @@ class AppointmentScheduler:
     def __init__(self, calendar: CalendarIntegration):
         """
         Initialize scheduler with calendar integration.
-        
+
         Args:
             calendar: Calendar system integration instance
         """
@@ -38,20 +38,20 @@ class AppointmentScheduler:
     ) -> tuple[bool, Optional[date]]:
         """
         Attempt to book an appointment for a patient.
-        
+
         If a preferred date is provided, tries to book that specific date.
         Otherwise, finds the next available slot.
-        
+
         Args:
             case: Follow-up case for the patient
             preferred_date: Patient's preferred appointment date (optional)
-            
+
         Returns:
             Tuple of (success boolean, booked date if successful)
         """
         patient = case.patient
         treatment_type = patient.treatment_type
-        
+
         if preferred_date:
             # Try to book the specific preferred date
             success = self.calendar.book_appointment(
@@ -67,7 +67,7 @@ class AppointmentScheduler:
             available_slots = self.calendar.find_available_slots(
                 treatment_type, after=date.today(), limit=1
             )
-            
+
             if available_slots:
                 next_slot = available_slots[0]
                 success = self.calendar.book_appointment(
@@ -76,7 +76,7 @@ class AppointmentScheduler:
                 if success:
                     case.status = CaseStatus.BOOKED
                     return True, next_slot
-            
+
             return False, None
 
     def reschedule(
@@ -84,30 +84,30 @@ class AppointmentScheduler:
     ) -> bool:
         """
         Reschedule an existing appointment to a new date.
-        
+
         Args:
             case: Follow-up case for the patient
             old_date: Current appointment date
             new_date: New desired appointment date
-            
+
         Returns:
             True if rescheduling successful
         """
         patient = case.patient
-        
+
         # Cancel old appointment
         cancel_success = self.calendar.cancel_appointment(
             patient.patient_id, old_date
         )
-        
+
         if not cancel_success:
             return False
-        
+
         # Book new appointment
         book_success = self.calendar.book_appointment(
             patient.patient_id, new_date, patient.treatment_type
         )
-        
+
         if book_success:
             case.status = CaseStatus.BOOKED
             return True
@@ -123,12 +123,12 @@ class AppointmentScheduler:
     ) -> list[date]:
         """
         Find available appointment slots for a patient.
-        
+
         Args:
             case: Follow-up case
             after: Find slots after this date
             limit: Maximum number of slots to return
-            
+
         Returns:
             List of available dates
         """
@@ -140,11 +140,11 @@ class AppointmentScheduler:
 class EscalationHandler:
     """
     Manages escalation of cases to human staff.
-    
+
     This component is crucial for demonstrating the agent's self-awareness
     of its limitations - a key feature for healthcare AI systems where
     knowing when NOT to act autonomously is as important as acting.
-    
+
     Escalation reasons include:
     - Complex patient questions requiring clinical expertise
     - Multiple failed contact attempts
@@ -152,14 +152,22 @@ class EscalationHandler:
     - Confused or frustrated patients
     """
 
-    def __init__(self, alert_email: Optional[str] = None):
+    def __init__(
+        self,
+        alert_email: Optional[str] = None,
+        notifier: Optional[Callable[[dict], None]] = None,
+    ):
         """
         Initialize escalation handler.
-        
+
         Args:
             alert_email: Email address for escalation alerts
+            notifier: Callable invoked with the escalation record so staff are
+                actually told. Kept as an injected callable so this class stays
+                transport-agnostic and testable.
         """
         self.alert_email = alert_email
+        self.notifier = notifier
         self.escalated_cases: list[dict] = []
 
     def escalate(
@@ -167,11 +175,11 @@ class EscalationHandler:
     ) -> None:
         """
         Escalate a case to human staff for manual handling.
-        
+
         Creates an escalation record and notifies appropriate staff members.
         In production, this would integrate with ticketing systems, send
         alerts via email/SMS, or create tasks in the clinic's workflow system.
-        
+
         Args:
             case: Follow-up case to escalate
             reason: Human-readable reason for escalation
@@ -179,7 +187,7 @@ class EscalationHandler:
         """
         # Update case status
         case.status = CaseStatus.ESCALATED
-        
+
         # Create escalation record
         escalation = {
             "patient_id": case.patient.patient_id,
@@ -192,13 +200,22 @@ class EscalationHandler:
             "escalated_at": datetime.now().isoformat(),
             "conversation_log": case.conversation_log.copy(),
         }
-        
+
         self.escalated_cases.append(escalation)
-        
+
         # Log escalation
         case.add_to_log(f"ESCALATED: {reason} (Priority: {priority})")
-        
-        # In production, would send notifications here
+
+        # Tell a human. A failed alert must never abort the cycle -- the case is
+        # already recorded above -- but it is loud, because an escalation nobody
+        # hears about is not an escalation.
+        if self.notifier is not None:
+            try:
+                self.notifier(escalation)
+                case.add_to_log("Escalation alert sent to staff")
+            except Exception as exc:  # pragma: no cover - defensive
+                case.add_to_log(f"Escalation alert FAILED: {exc}")
+
         print(f"\n{'='*60}")
         print(f"⚠️  CASE ESCALATED - Priority: {priority.upper()}")
         print(f"{'='*60}")
@@ -211,10 +228,10 @@ class EscalationHandler:
     def get_escalated_cases(self, priority: Optional[str] = None) -> list[dict]:
         """
         Retrieve escalated cases, optionally filtered by priority.
-        
+
         Args:
             priority: Filter by priority level (optional)
-            
+
         Returns:
             List of escalation records
         """
@@ -228,11 +245,11 @@ class EscalationHandler:
     def resolve_escalation(self, patient_id: str, resolution_note: str) -> bool:
         """
         Mark an escalated case as resolved by staff.
-        
+
         Args:
             patient_id: Patient identifier
             resolution_note: Notes on how the case was resolved
-            
+
         Returns:
             True if escalation found and marked resolved
         """
@@ -247,21 +264,21 @@ class EscalationHandler:
 class AuditLogger:
     """
     Comprehensive audit logging for compliance and accountability.
-    
+
     In healthcare applications, maintaining a complete audit trail is
     essential for:
     - Regulatory compliance (HIPAA, PDPA, GDPR)
     - Quality assurance and system improvement
     - Liability protection
     - Understanding agent decision-making
-    
+
     Every agent decision and action is logged with full context.
     """
 
     def __init__(self, log_file: Optional[str] = None):
         """
         Initialize audit logger.
-        
+
         Args:
             log_file: Path to audit log file (optional, defaults to audit_log.json)
         """
@@ -284,7 +301,7 @@ class AuditLogger:
         """Persist audit logs to file."""
         log_path = Path(self.log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(log_path, 'w') as f:
             json.dump(self.log_entries, f, indent=2, default=str)
 
@@ -294,10 +311,10 @@ class AuditLogger:
     ) -> None:
         """
         Log an agent decision with full context and rationale.
-        
+
         This creates a transparent, auditable record of why the agent
         took a particular action, which is crucial for healthcare AI.
-        
+
         Args:
             case: Follow-up case being processed
             action: Action the agent decided to take
@@ -317,20 +334,20 @@ class AuditLogger:
             "reminder_count": case.reminder_count,
             "conversation_length": len(case.conversation_log),
         }
-        
+
         if additional_context:
             log_entry["additional_context"] = additional_context
-        
+
         self.log_entries.append(log_entry)
         self._save_logs()
 
     def log_communication(
-        self, case: FollowUpCase, channel: str, message: str, 
+        self, case: FollowUpCase, channel: str, message: str,
         direction: str, success: bool
     ) -> None:
         """
         Log a communication event (sent or received message).
-        
+
         Args:
             case: Follow-up case
             channel: Communication channel used
@@ -347,7 +364,7 @@ class AuditLogger:
             "success": success,
             "message_preview": message[:100] + "..." if len(message) > 100 else message,
         }
-        
+
         self.log_entries.append(log_entry)
         self._save_logs()
 
@@ -357,7 +374,7 @@ class AuditLogger:
     ) -> None:
         """
         Log appointment-related actions (booking, rescheduling, cancellation).
-        
+
         Args:
             case: Follow-up case
             action: Type of appointment action
@@ -374,20 +391,20 @@ class AuditLogger:
             "success": success,
             "treatment_type": case.patient.treatment_type,
         }
-        
+
         if details:
             log_entry["details"] = details
-        
+
         self.log_entries.append(log_entry)
         self._save_logs()
 
     def get_patient_history(self, patient_id: str) -> list[dict]:
         """
         Retrieve complete audit history for a specific patient.
-        
+
         Args:
             patient_id: Patient identifier
-            
+
         Returns:
             List of audit log entries for this patient
         """
@@ -401,11 +418,11 @@ class AuditLogger:
     ) -> list[dict]:
         """
         Retrieve audit logs within a date range.
-        
+
         Args:
             start_date: Start of date range
             end_date: End of date range
-            
+
         Returns:
             List of audit log entries in range
         """
@@ -417,7 +434,7 @@ class AuditLogger:
     def generate_summary_report(self) -> dict:
         """
         Generate summary statistics from audit logs.
-        
+
         Returns:
             Dictionary containing summary metrics
         """
@@ -425,19 +442,19 @@ class AuditLogger:
             1 for entry in self.log_entries
             if entry["event_type"] == "agent_decision"
         )
-        
+
         total_communications = sum(
             1 for entry in self.log_entries
             if entry["event_type"] == "communication"
         )
-        
+
         successful_bookings = sum(
             1 for entry in self.log_entries
             if entry["event_type"] == "appointment_action"
             and entry["action"] == "booking"
             and entry["success"]
         )
-        
+
         return {
             "total_decisions": total_decisions,
             "total_communications": total_communications,

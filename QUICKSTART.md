@@ -28,7 +28,7 @@ This will:
 ## Option 2: Web Dashboard
 
 ```bash
-python app.py
+python web/app.py
 ```
 
 Then open your browser to: **http://localhost:8080**
@@ -43,17 +43,18 @@ Features:
 ## Option 3: Direct Python Usage
 
 ```python
-from orchestrator import FollowUpAgentOrchestrator
-from data_access import MockPatientDataStore, MockCalendarIntegration
-from sample_data import initialize_sample_data
+from agent.orchestrator import FollowUpAgentOrchestrator
+from core.data_access import MockPatientDataStore, MockCalendarIntegration
+from utils.sample_data import initialize_sample_data
 
 # Setup
 data_store = MockPatientDataStore()
 calendar = MockCalendarIntegration()
 initialize_sample_data(data_store, calendar)
 
-# Create agent
-agent = FollowUpAgentOrchestrator(data_store, calendar)
+# Create agent. `with_llm_decisions` routes DECIDE through Claude when
+# ANTHROPIC_API_KEY is set, and silently stays on the rules when it is not.
+agent = FollowUpAgentOrchestrator.with_llm_decisions(data_store, calendar)
 
 # Run daily cycle
 cases = agent.run_daily_cycle()
@@ -65,7 +66,29 @@ agent.handle_incoming_reply("P001", "Yes, I'd like to book")
 # View statistics
 stats = agent.get_statistics()
 print(stats)
+
+# What could not be delivered, and why
+for record in agent.undelivered:
+    print(record["patient_id"], record["channel"].value, record["error_code"])
 ```
+
+Every decision records where it came from (`ActionDecision.source`: `rules`,
+`llm`, `llm-guardrail`, `llm-error` or `llm-disabled`), so the audit log always
+tells you whether a model or the rules made a given choice.
+
+### Letting the agent actually send
+
+Nothing is transmitted until **both** switches are set:
+
+```bash
+export MESSAGING_DRY_RUN=0    # tools layer
+export AGENT_LIVE_SENDS=1     # agent layer
+export AGENT_ESCALATION_EMAIL=staff@clinic.example   # who to alert
+```
+
+Without them, the agent prints what it would have sent and still exercises the
+full failure/fallback/escalation path. See "Agent Decisions and Safety Gates" in
+README.md.
 
 ## Option 4: LLM Tool Layer (Message Sending)
 
